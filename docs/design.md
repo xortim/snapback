@@ -44,19 +44,21 @@ Checked the alternatives before committing to shelling out:
 
 - **`vmrest` (Fusion Pro REST API):** ruled out. Covers power state, network adapters, and shared folders — [Broadcom's docs](https://techdocs.broadcom.com/us/en/vmware-cis/desktop-hypervisors/fusion-pro/13-0/using-vmware-fusion/guide-and-help-using-the-vmware-fusion-rest-api.html) don't expose a snapshots endpoint.
 - **VIX API** (the legacy C API `vmrun` itself is built on): ruled out. No Go bindings, unclear support status on current Fusion/Apple Silicon, and it's less officially maintained than the CLI wrapping it. Not worth building on something shakier than the fallback.
-- **`vmcli`** (Fusion 13+, newer than `vmrun`): has a dedicated `Snapshot` module. **Confirmed (2026-08-23, Fusion with vmrun 1.17.0.25388279):** `vmcli Snapshot query` supports the same `-f/--format <2,1,0>` structured-output flag as `Power query`, and `vmcli Tools Query` is a structured equivalent to `checkToolsState`. `vmcli` is the primary backing tool — `Snapshot Take`/`Delete`/`query` for snapshot lifecycle, `Tools Query` for the pre-flight quiesce check.
-- **`vmrun`:** fallback/reference. `checkToolsState` is present and working on this install (addresses the [GNS3#1499](https://github.com/GNS3/gns3-gui/issues/1499) "missing on some builds" risk — not an issue here) — useful as a secondary source if `vmcli`'s output proves unreliable in practice. Neither tool's structured output has been validated against a real VM yet (none registered on this machine) — do that as part of #11 before trusting field names/values in the real `VMController`.
+- **`vmcli`** (Fusion 13+, newer than `vmrun`): has a dedicated `Snapshot` module. **Confirmed (2026-08-23, Fusion with vmrun 1.17.0.25388279, tested against a real Ubuntu ARM VM):** `vmcli Snapshot query -f json` and `vmcli Tools Query -f json` both return clean, well-formed JSON. Note the `--help` text is wrong about the format flag's values — it claims `-f/--format <2, 1, 0>`, but the accepted values are actually `toml`, `yaml`, `json`; the numeric forms are rejected outright. `vmcli` is the primary backing tool — `Snapshot Take`/`Delete`/`query -f json` for snapshot lifecycle, `Tools Query -f json` for the pre-flight quiesce check.
+- **`vmrun`:** fallback/reference. `checkToolsState` is present on this install (addresses the [GNS3#1499](https://github.com/GNS3/gns3-gui/issues/1499) "missing on some builds" risk — not an issue here), but its state model is incomplete: against a running VM with no VMware Tools installed in the guest, it returned `unknown` — a fourth state beyond the documented `installed`/`running`/`notInstalled`. `vmcli Tools Query -f json`'s `runningStatus`/`installType`/`versionStatus` fields are more granular and were able to represent this case cleanly (`installType: "unknown"`, `runningStatus: "not_running"`) — prefer it over `vmrun checkToolsState` as the quiesce-check source. Not yet validated: the `installed`/`running` states, since the test VM has no Tools installed — confirm those once a VM with Tools present is available.
 
 Either way, this is a CLI dependency — there's no way around shelling out. The fix for testability isn't finding a library, it's isolating the shell-out behind an interface so the choreography logic doesn't know or care how snapshots actually happen:
 
 ```go
 type VMController interface {
-    CheckToolsState(vmxPath string) (string, error) // "installed" | "running" | "notInstalled"
+    CheckToolsState(vmxPath string) (string, error) // "installed" | "running" | "notInstalled" | "unknown"
     Snapshot(vmxPath, name string) error
     ListSnapshots(vmxPath string) ([]string, error)
     DeleteSnapshot(vmxPath, name string) error
 }
 ```
+
+`"unknown"` is a real, confirmed return value (not hypothetical) — it's what a Tools-less guest reports. Treat it the same as `"notInstalled"`: gate the quiesce step off, proceed crash-consistent, record it in the manifest's `tools_state` as-is rather than normalizing it away.
 
 The real implementation shells out and parses output. A fake implementation backs unit tests for the choreography state machine — no Fusion, no VM, no flakiness, runs in CI on every commit. Reserve actual CLI execution for a small integration suite behind a build tag or `SNAPBACK_INTEGRATION=1` env var, run manually against a disposable scratch VM.
 
