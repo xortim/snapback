@@ -31,7 +31,7 @@ Vimalin does this well but it's shareware, GUI-only, and opaque about what it's 
 
 | Component         | Responsibility                                                        | Tech                                                            |
 | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
-| `snapback` binary | Backup/restore choreography, config parsing, status reporting         | Go                                                              |
+| `snapback` binary | Backup/restore choreography, config parsing, status reporting         | Go, [cobra](https://github.com/spf13/cobra) (commands), [koanf](https://github.com/knadh/koanf) (config) |
 | VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, investigate first) or `vmrun` (fallback)   |
 | launchd           | Scheduled execution                                                   | `~/Library/LaunchAgents/com.tim.snapback.plist`                 |
 | xbar plugin       | Menu bar status + manual trigger                                      | Shell script wrapping `snapback status --xbar`                  |
