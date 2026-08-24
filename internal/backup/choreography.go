@@ -43,6 +43,16 @@ type Result struct {
 // recovered by the separate `snapback cleanup` command (docs/design.md),
 // not by automatic rollback here.
 func Run(ctrl vm.Controller, opts Options) (*Result, error) {
+	if opts.VMName == "" || filepath.Base(opts.VMName) != opts.VMName {
+		return nil, fmt.Errorf("invalid VMName %q", opts.VMName)
+	}
+	if opts.Destination == "" {
+		return nil, fmt.Errorf("destination is required")
+	}
+	if _, err := os.Stat(opts.VMXPath); err != nil {
+		return nil, fmt.Errorf("vmx path: %w", err)
+	}
+
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -96,6 +106,12 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	if err := os.MkdirAll(outputDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
+	succeeded := false
+	defer func() {
+		if !succeeded {
+			_ = os.RemoveAll(outputDir)
+		}
+	}()
 
 	tempArchivePath := filepath.Join(outputDir, "archive.tmp")
 	usedCompression, err := createArchive(stagingRoot, tempArchivePath, opts.Compression)
@@ -136,6 +152,7 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 		return nil, err
 	}
 
+	succeeded = true
 	return &Result{
 		ArchiveID:    archiveID,
 		OutputDir:    outputDir,

@@ -4,9 +4,14 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +77,46 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	}
 	if !result.Manifest.Timestamp.Equal(fixedNow) {
 		t.Errorf("Manifest.Timestamp = %v, want %v", result.Manifest.Timestamp, fixedNow)
+	}
+
+	// Independently recompute the archive's checksum and size rather than
+	// trusting the values Run() reports about its own output, and confirm
+	// manifest.json on disk actually matches result.Manifest.
+	archiveBytes, err := os.ReadFile(result.ArchivePath)
+	if err != nil {
+		t.Fatalf("ReadFile(ArchivePath) error = %v", err)
+	}
+	sum := sha256.Sum256(archiveBytes)
+	wantSHA256 := hex.EncodeToString(sum[:])
+	if result.Manifest.SHA256 != wantSHA256 {
+		t.Errorf("Manifest.SHA256 = %q, want independently computed %q", result.Manifest.SHA256, wantSHA256)
+	}
+
+	archiveInfo, err := os.Stat(result.ArchivePath)
+	if err != nil {
+		t.Fatalf("Stat(ArchivePath) error = %v", err)
+	}
+	if result.Manifest.SizeBytes != archiveInfo.Size() {
+		t.Errorf("Manifest.SizeBytes = %d, want %d (os.Stat)", result.Manifest.SizeBytes, archiveInfo.Size())
+	}
+
+	manifestBytes, err := os.ReadFile(result.ManifestPath)
+	if err != nil {
+		t.Fatalf("ReadFile(ManifestPath) error = %v", err)
+	}
+	var onDiskManifest backup.Manifest
+	if err := json.Unmarshal(manifestBytes, &onDiskManifest); err != nil {
+		t.Fatalf("json.Unmarshal(manifest.json) error = %v", err)
+	}
+	if onDiskManifest.VMName != result.Manifest.VMName ||
+		onDiskManifest.GuestOS != result.Manifest.GuestOS ||
+		onDiskManifest.SizeBytes != result.Manifest.SizeBytes ||
+		onDiskManifest.Comment != result.Manifest.Comment ||
+		!onDiskManifest.Timestamp.Equal(result.Manifest.Timestamp) ||
+		onDiskManifest.ToolsState != result.Manifest.ToolsState ||
+		onDiskManifest.SHA256 != result.Manifest.SHA256 ||
+		onDiskManifest.Compression != result.Manifest.Compression {
+		t.Errorf("manifest.json on disk = %+v, want %+v", onDiskManifest, result.Manifest)
 	}
 
 	if filepath.Ext(result.ArchivePath) != ".gz" {
@@ -237,6 +282,42 @@ func TestRun_DeleteSnapshotError_StillCleansUpStaging(t *testing.T) {
 	}
 }
 
+// TestRun_CreateArchiveError_RemovesOutputDir is a regression test for a bug
+// where outputDir (Destination/<archiveID>) was created via os.MkdirAll but
+// never removed if a later step (archive creation, rename, stat, checksum,
+// or manifest write) failed. That left a phantom Destination/<archiveID>
+// directory -- containing a stray archive.tmp or a complete archive with no
+// manifest.json -- that would confuse `list`/`prune`/`status`, which scan
+// Destination for backups. The failure here is forced by passing an unknown
+// Compression value, which createArchive rejects after outputDir already
+// exists on disk.
+func TestRun_CreateArchiveError_RemovesOutputDir(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	fixedNow := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	destination := t.TempDir()
+	archiveID := "myvm-" + fixedNow.Format("20060102T150405Z")
+	outputDir := filepath.Join(destination, archiveID)
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: destination,
+		StagingDir:  t.TempDir(),
+		Compression: "bogus-unknown-compression",
+		Now:         func() time.Time { return fixedNow },
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error from createArchive rejecting unknown compression")
+	}
+
+	if _, statErr := os.Stat(outputDir); !os.IsNotExist(statErr) {
+		t.Errorf("outputDir %q still exists after failed Run() (statErr=%v), want removed", outputDir, statErr)
+	}
+}
+
 // TestRun_CopyDirPartialFailure_CleansUpStagingDir is a regression test for
 // a bug where the staging-directory cleanup defer was registered AFTER the
 // copyDir call it was meant to guard. copyDir creates (and starts
@@ -312,6 +393,112 @@ func TestRun_CopyDirPartialFailure_CleansUpStagingDir(t *testing.T) {
 
 	if _, statErr := os.Stat(stagingRoot); !os.IsNotExist(statErr) {
 		t.Errorf("staging root %q still exists after failed Run() (statErr=%v), want removed (os.Stat err = %v)", stagingRoot, statErr, statErr)
+	}
+}
+
+func TestRun_EmptyVMName_ReturnsError(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for empty VMName")
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; validation should fail before touching ctrl", snapshots)
+	}
+}
+
+func TestRun_PathTraversalVMName_ReturnsError(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "../escape",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for VMName containing path traversal")
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; validation should fail before touching ctrl", snapshots)
+	}
+}
+
+func TestRun_EmptyDestination_ReturnsError(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: "",
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for empty Destination")
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; validation should fail before touching ctrl", snapshots)
+	}
+}
+
+func TestRun_MissingVMXPath_ReturnsError(t *testing.T) {
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     filepath.Join(t.TempDir(), "does-not-exist.vmx"),
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for missing VMXPath")
+	}
+}
+
+func TestRun_CompressionAuto_PrefersZstdWhenAvailable(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed, skipping")
+	}
+
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	result, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	if result.Manifest.Compression != "zstd" {
+		t.Errorf("Manifest.Compression = %q, want %q", result.Manifest.Compression, "zstd")
+	}
+	if !strings.HasSuffix(result.ArchivePath, ".tar.zst") {
+		t.Errorf("ArchivePath = %q, want it to end with %q", result.ArchivePath, ".tar.zst")
 	}
 }
 
