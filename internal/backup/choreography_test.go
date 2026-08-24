@@ -237,6 +237,84 @@ func TestRun_DeleteSnapshotError_StillCleansUpStaging(t *testing.T) {
 	}
 }
 
+// TestRun_CopyDirPartialFailure_CleansUpStagingDir is a regression test for
+// a bug where the staging-directory cleanup defer was registered AFTER the
+// copyDir call it was meant to guard. copyDir creates (and starts
+// populating) stagingRoot before it can fail partway through, so if
+// copyDir errors, the defer must already be armed or a partially-copied
+// staging directory (potentially containing VM disk data) is orphaned on
+// the host filesystem forever.
+//
+// The failure is forced deterministically, without relying on permission
+// checks (which root bypasses in some CI environments): a regular file is
+// pre-planted at the exact path copyDir will try to os.MkdirAll for a
+// subdirectory entry ("subdir"). MkdirAll always errors when a
+// non-directory file already exists at that path -- that's an ENOTDIR
+// condition, not a permission check, so it fails the same way whether the
+// test runs as root or not. "disk.vmdk" and "myvm.vmx" sort before
+// "subdir" lexically, so copyDir's walk copies both of them successfully
+// before hitting the conflict, reproducing the "partially-populated
+// staging directory" the review finding described.
+func TestRun_CopyDirPartialFailure_CleansUpStagingDir(t *testing.T) {
+	srcBundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(srcBundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	vmxPath := filepath.Join(srcBundle, "myvm.vmx")
+	if err := os.WriteFile(vmxPath, []byte("guestOS = \"ubuntu-64\"\n"), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcBundle, "disk.vmdk"), []byte("fake disk contents"), 0o644); err != nil {
+		t.Fatalf("write disk: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(srcBundle, "subdir"), 0o755); err != nil {
+		t.Fatalf("mkdir subdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcBundle, "subdir", "inner.txt"), []byte("inner"), 0o644); err != nil {
+		t.Fatalf("write inner file: %v", err)
+	}
+
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	fixedNow := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	stagingDir := t.TempDir()
+
+	// Pre-compute the exact staging root Run() will use -- same formula as
+	// choreography.go: archiveID = "<vmname>-<ts>", stagingRoot =
+	// "<StagingDir>/snapback-staging-<archiveID>" -- then plant a regular
+	// file at the path copyDir will try to MkdirAll for "subdir".
+	ts := fixedNow.Format("20060102T150405Z")
+	archiveID := "myvm-" + ts
+	stagingRoot := filepath.Join(stagingDir, "snapback-staging-"+archiveID)
+	stagedBundle := filepath.Join(stagingRoot, "myvm.vmwarevm")
+	conflictPath := filepath.Join(stagedBundle, "subdir")
+	if err := os.MkdirAll(stagedBundle, 0o755); err != nil {
+		t.Fatalf("mkdir staged bundle: %v", err)
+	}
+	if err := os.WriteFile(conflictPath, []byte("conflict"), 0o644); err != nil {
+		t.Fatalf("write conflict file: %v", err)
+	}
+
+	opts := backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  stagingDir,
+		Compression: "gzip",
+		Now:         func() time.Time { return fixedNow },
+	}
+
+	_, err := backup.Run(fake, opts)
+	if err == nil {
+		t.Fatal("Run() error = nil, want error from copyDir failing on the conflicting subdir entry")
+	}
+
+	if _, statErr := os.Stat(stagingRoot); !os.IsNotExist(statErr) {
+		t.Errorf("staging root %q still exists after failed Run() (statErr=%v), want removed (os.Stat err = %v)", stagingRoot, statErr, statErr)
+	}
+}
+
 func writeMinimalVMX(t *testing.T) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")

@@ -83,10 +83,10 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	stagingRoot := filepath.Join(stagingParent, "snapback-staging-"+archiveID)
 	bundleDir := filepath.Dir(opts.VMXPath)
 	stagedBundle := filepath.Join(stagingRoot, filepath.Base(bundleDir))
+	defer func() { _ = os.RemoveAll(stagingRoot) }()
 	if err := copyDir(bundleDir, stagedBundle); err != nil {
 		return nil, fmt.Errorf("copy bundle: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(stagingRoot) }()
 
 	if err := ctrl.DeleteSnapshot(opts.VMXPath, snapshotName); err != nil {
 		return nil, fmt.Errorf("delete snapshot: %w", err)
