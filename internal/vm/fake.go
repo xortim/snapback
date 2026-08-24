@@ -3,8 +3,9 @@ package vm
 import "fmt"
 
 // FakeVMController is an in-memory Controller for unit tests. It tracks
-// snapshots per vmxPath and lets tests inject a one-shot error per method
-// by setting the corresponding *Err field before the call.
+// snapshots per vmxPath and lets tests inject an error per method by
+// setting the corresponding *Err field — the field stays set (sticky)
+// until the test clears it, so every call to that method fails until then.
 type FakeVMController struct {
 	ToolsState    ToolsState
 	ToolsStateErr error

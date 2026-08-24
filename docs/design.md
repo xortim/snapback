@@ -50,17 +50,17 @@ Checked the alternatives before committing to shelling out:
 Either way, this is a CLI dependency — there's no way around shelling out. The fix for testability isn't finding a library, it's isolating the shell-out behind an interface so the choreography logic doesn't know or care how snapshots actually happen:
 
 ```go
-type VMController interface {
-    CheckToolsState(vmxPath string) (string, error) // "installed" | "running" | "notInstalled" | "unknown"
+type Controller interface {
+    CheckToolsState(vmxPath string) (ToolsState, error) // ToolsInstalled | ToolsRunning | ToolsNotInstalled | ToolsUnknown
     Snapshot(vmxPath, name string) error
     ListSnapshots(vmxPath string) ([]string, error)
     DeleteSnapshot(vmxPath, name string) error
 }
 ```
 
-`"unknown"` is a real, confirmed return value (not hypothetical) — it's what a Tools-less guest reports. Treat it the same as `"notInstalled"`: gate the quiesce step off, proceed crash-consistent, record it in the manifest's `tools_state` as-is rather than normalizing it away.
+Implemented as `internal/vm.Controller` (named to avoid the `vm.VMController` stutter), with `ToolsState` a typed string rather than a bare string. `ToolsUnknown` is a real, confirmed return value (not hypothetical) — it's what a Tools-less guest reports. Treat it the same as `ToolsNotInstalled`: gate the quiesce step off, proceed crash-consistent, record it in the manifest's `tools_state` as-is rather than normalizing it away.
 
-The real implementation shells out and parses output. A fake implementation backs unit tests for the choreography state machine — no Fusion, no VM, no flakiness, runs in CI on every commit. Reserve actual CLI execution for a small integration suite behind a build tag or `SNAPBACK_INTEGRATION=1` env var, run manually against a disposable scratch VM.
+The real implementation shells out and parses output. `internal/vm.FakeVMController` backs unit tests for the choreography state machine — no Fusion, no VM, no flakiness, runs in CI on every commit. Reserve actual CLI execution for a small integration suite behind a build tag or `SNAPBACK_INTEGRATION=1` env var, run manually against a disposable scratch VM.
 
 ### Backup choreography
 
@@ -85,7 +85,7 @@ The mechanism that actually works, and the one Vimalin uses under the hood: snap
 
 Step 3 is what makes this safe: once the snapshot exists, the disk files being copied in step 6 are frozen — the VM's ongoing writes land in the new delta, not in the files `cp` is reading. Step 7 folds that delta back into the source after the copy completes, so the running VM never sees a pause and never carries a lingering snapshot.
 
-**Guest-level consistency is a separate question from host-level sync, and it's now checkable rather than assumed.** `vmrun checkToolsState <vmx>` returns `installed`, `running`, or `notInstalled`. Only `running` means Fusion can quiesce the guest filesystem before the snapshot commits — anything else is a crash-consistent snapshot, equivalent to a power-cord pull from the guest's perspective. Gate step 3 on this check and record the result in the manifest (`tools_state`), so every backup's consistency guarantee is knowable after the fact rather than assumed at write time. Note: `checkToolsState` has been reported missing in some VIX/Workstation version combinations ([GNS3 #1499](https://github.com/GNS3/gns3-gui/issues/1499)) — confirm it's present on your installed Fusion version before building around it.
+**Guest-level consistency is a separate question from host-level sync, and it's now checkable rather than assumed.** `vmrun checkToolsState <vmx>` returns `installed`, `running`, `notInstalled`, or `unknown`. Only `running` means Fusion can quiesce the guest filesystem before the snapshot commits — anything else is a crash-consistent snapshot, equivalent to a power-cord pull from the guest's perspective. Gate step 3 on this check and record the result in the manifest (`tools_state`), so every backup's consistency guarantee is knowable after the fact rather than assumed at write time. Note: `checkToolsState` has been reported missing in some VIX/Workstation version combinations ([GNS3 #1499](https://github.com/GNS3/gns3-gui/issues/1499)) — confirm it's present on your installed Fusion version before building around it.
 
 ## Command Reference
 
