@@ -97,6 +97,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback list`                 | List backup archives with timestamp, size, comment                                               |
 | `snapback restore <archive-id>` | Restore to a new `.vmwarevm`, suffixed `- backup yyyy-mm-dd`, never overwrites source            |
 | `snapback status`               | Human-readable status: last run, next scheduled run, disk usage                                  |
+| `snapback status --vm <name>`   | Drill into a single VM: full consistency detail, disk usage, retention policy                    |
 | `snapback status --xbar`        | Same data, formatted for xbar plugin consumption                                                 |
 | `snapback prune`                | Manually trigger retention cleanup                                                               |
 
