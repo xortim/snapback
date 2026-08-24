@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -73,6 +74,36 @@ func TestCreateArchive_UsesZstdWhenAvailable(t *testing.T) {
 		t.Fatalf("zstd -d error = %v", err)
 	}
 	assertTarContains(t, bytes.NewReader(decompressed), "file.txt", "hello")
+}
+
+func TestCreateArchive_ZstdFailureIncludesStderr(t *testing.T) {
+	// Put a fake "zstd" binary at the front of PATH that always fails and
+	// writes a distinctive message to stderr, so we can assert that
+	// message surfaces in the error returned by createArchive rather than
+	// being silently discarded.
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "zstd")
+	script := "#!/bin/sh\necho 'zstd: forced test failure detail xyz123' >&2\nexit 1\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture script needs to be executable
+		t.Fatalf("write fake zstd script: %v", err)
+	}
+
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+	destPath := filepath.Join(t.TempDir(), "archive.out")
+
+	_, err := createArchive(srcDir, destPath, "zstd")
+	if err == nil {
+		t.Fatal("createArchive() error = nil, want error from failing zstd")
+	}
+	const wantSubstr = "forced test failure detail xyz123"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("createArchive() error = %q, want it to contain fake zstd's stderr output %q", err.Error(), wantSubstr)
+	}
 }
 
 func TestCreateArchive_UnknownCompressionReturnsError(t *testing.T) {

@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -73,6 +74,8 @@ func tarToZstd(srcDir string, out io.Writer) error {
 		return fmt.Errorf("zstd stdin pipe: %w", err)
 	}
 	cmd.Stdout = out
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start zstd: %w", err)
@@ -89,7 +92,7 @@ func tarToZstd(srcDir string, out io.Writer) error {
 		return fmt.Errorf("close zstd stdin: %w", closeErr)
 	}
 	if waitErr != nil {
-		return fmt.Errorf("zstd: %w", waitErr)
+		return fmt.Errorf("zstd: %w: %s", waitErr, stderr.String())
 	}
 	return nil
 }
