@@ -61,18 +61,23 @@ is isolated behind one interface so the choreography logic never touches
 a shell command directly:
 
 ```go
-type VMController interface {
-    CheckToolsState(vmxPath string) (string, error) // "installed" | "running" | "notInstalled"
+type Controller interface {
+    CheckToolsState(vmxPath string) (ToolsState, error) // ToolsInstalled | ToolsRunning | ToolsNotInstalled | ToolsUnknown
     Snapshot(vmxPath, name string) error
     ListSnapshots(vmxPath string) ([]string, error)
     DeleteSnapshot(vmxPath, name string) error
 }
 ```
 
-A real implementation shells out; a fake implementation backs the unit
-tests for the choreography state machine. Write choreography logic
-against the fake first — this is the intended TDD path for phase 1, not
-an afterthought.
+Implemented in `internal/vm` (package `vm`, so usage is `vm.Controller` —
+named to avoid the `vm.VMController` stutter). `ToolsState` is a typed
+string with those four constants, not a bare string — `unknown` is a
+real, confirmed guest state (see `docs/design.md`), not a hypothetical.
+
+A real implementation shells out; `vm.FakeVMController` (`internal/vm`)
+backs the unit tests for the choreography state machine. Write
+choreography logic against the fake first — this is the intended TDD
+path for phase 1, not an afterthought.
 
 **Backup choreography** (the zero-downtime mechanism, full detail in
 `docs/design.md#backup-choreography`): `vmrun clone` cannot be used at
