@@ -11,6 +11,7 @@ GO_FILES    := $(shell find . -type f -name '*.go' -not -path './vendor/*')
 
 EXECUTABLE  := snapback
 ARTIFACT    := dist/$(GOOS)-$(GOARCH)/$(EXECUTABLE)
+CMD_PATH    := ./cmd/$(EXECUTABLE)
 
 .PHONY: all
 all: clean verify lint test build
@@ -26,7 +27,7 @@ $(GO_FILES):
 build: $(ARTIFACT) ## Build binary
 $(ARTIFACT): $(GO_FILES)
 	@$(MAKE) --no-print-directory log-build
-	@$(GOBUILD) -o $@
+	@$(GOBUILD) -o $@ $(CMD_PATH)
 	@ln -fs $(GOOS)-$(GOARCH)/$(EXECUTABLE) dist/$(EXECUTABLE)
 
 .PHONY: verify
