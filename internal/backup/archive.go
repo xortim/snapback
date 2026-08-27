@@ -85,14 +85,18 @@ func tarToZstd(srcDir string, out io.Writer) error {
 	closeErr := stdin.Close()
 	waitErr := cmd.Wait()
 
+	// Check waitErr first: if zstd itself exited with an error, that's the
+	// root cause and its stderr is the only place that explains why -- a
+	// tarErr in this situation is just a symptom (zstd closed the pipe
+	// early, so the in-progress write into it failed with a broken pipe).
+	if waitErr != nil {
+		return fmt.Errorf("zstd: %w: %s", waitErr, stderr.String())
+	}
 	if tarErr != nil {
 		return tarErr
 	}
 	if closeErr != nil {
 		return fmt.Errorf("close zstd stdin: %w", closeErr)
-	}
-	if waitErr != nil {
-		return fmt.Errorf("zstd: %w: %s", waitErr, stderr.String())
 	}
 	return nil
 }

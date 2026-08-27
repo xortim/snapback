@@ -106,6 +106,42 @@ func TestCreateArchive_ZstdFailureIncludesStderr(t *testing.T) {
 	}
 }
 
+func TestCreateArchive_ZstdFailureDuringTarWrite_IncludesStderr(t *testing.T) {
+	// Simulate zstd dying immediately (before draining stdin) while a large
+	// backup is still being tar'd into it -- realistic for multi-GB VM
+	// disks. The fake zstd script below exits right away without reading
+	// stdin, so once the OS pipe buffer fills, tarTo's write to stdin fails
+	// with a broken-pipe error *before* cmd.Wait() returns. The bug this
+	// guards against: that broken-pipe error was returned as-is, discarding
+	// zstd's real stderr diagnosis of why it died.
+	binDir := t.TempDir()
+	scriptPath := filepath.Join(binDir, "zstd")
+	script := "#!/bin/sh\necho 'zstd: forced early exit failure abc789' >&2\nexit 1\n"
+	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil { //nolint:gosec // test fixture script needs to be executable
+		t.Fatalf("write fake zstd script: %v", err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	srcDir := t.TempDir()
+	// Larger than any realistic OS pipe buffer (typically 64KB on Linux,
+	// 16-64KB on macOS) so tarTo's write blocks until the reader is gone,
+	// then fails with a broken-pipe error instead of completing cleanly.
+	bigContent := bytes.Repeat([]byte("A"), 8*1024*1024)
+	if err := os.WriteFile(filepath.Join(srcDir, "big.bin"), bigContent, 0o644); err != nil {
+		t.Fatalf("write big file: %v", err)
+	}
+	destPath := filepath.Join(t.TempDir(), "archive.out")
+
+	_, err := createArchive(srcDir, destPath, "zstd")
+	if err == nil {
+		t.Fatal("createArchive() error = nil, want error from failing zstd")
+	}
+	const wantSubstr = "forced early exit failure abc789"
+	if !strings.Contains(err.Error(), wantSubstr) {
+		t.Errorf("createArchive() error = %q, want it to contain fake zstd's stderr output %q even though the tar-side write also failed with a broken pipe", err.Error(), wantSubstr)
+	}
+}
+
 func TestCreateArchive_UnknownCompressionReturnsError(t *testing.T) {
 	srcDir := t.TempDir()
 	destPath := filepath.Join(t.TempDir(), "archive.out")
