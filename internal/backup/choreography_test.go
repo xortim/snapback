@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xortim/snapback/internal/backup"
+	"github.com/xortim/snapback/internal/progress"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -49,7 +51,7 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 		Now:         func() time.Time { return fixedNow },
 	}
 
-	result, err := backup.Run(fake, opts)
+	result, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, opts)
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil", err)
 	}
@@ -205,7 +207,7 @@ func TestRun_ReadsGuestOSBeforeSnapshot(t *testing.T) {
 	fake.ToolsState = vm.ToolsRunning
 	ctrl := &vmxDeletingController{FakeVMController: fake}
 
-	result, err := backup.Run(ctrl, backup.Options{
+	result, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -225,7 +227,7 @@ func TestRun_NonRunningToolsState_RecordsCrashConsistent(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsNotInstalled
 
-	result, err := backup.Run(fake, backup.Options{
+	result, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -245,7 +247,7 @@ func TestRun_CheckToolsStateError_AbortsBeforeSnapshot(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsStateErr = errBoom
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -267,7 +269,7 @@ func TestRun_SnapshotError_Aborts(t *testing.T) {
 	fake.ToolsState = vm.ToolsRunning
 	fake.SnapshotErr = errBoom
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -284,7 +286,7 @@ func TestRun_ListSnapshotsError_Aborts(t *testing.T) {
 	fake.ToolsState = vm.ToolsRunning
 	fake.ListSnapshotsErr = errBoom
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -302,7 +304,7 @@ func TestRun_DeleteSnapshotError_StillCleansUpStaging(t *testing.T) {
 	fake.DeleteSnapshotErr = errBoom
 
 	stagingDir := t.TempDir()
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -340,7 +342,7 @@ func TestRun_CreateArchiveError_RemovesOutputDir(t *testing.T) {
 	archiveID := "myvm-" + fixedNow.Format("20060102T150405Z")
 	outputDir := filepath.Join(destination, archiveID)
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: destination,
@@ -425,7 +427,7 @@ func TestRun_CopyDirPartialFailure_CleansUpStagingDir(t *testing.T) {
 		Now:         func() time.Time { return fixedNow },
 	}
 
-	_, err := backup.Run(fake, opts)
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, opts)
 	if err == nil {
 		t.Fatal("Run() error = nil, want error from copyDir failing on the conflicting subdir entry")
 	}
@@ -440,7 +442,7 @@ func TestRun_EmptyVMName_ReturnsError(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -461,7 +463,7 @@ func TestRun_PathTraversalVMName_ReturnsError(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "../escape",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -482,7 +484,7 @@ func TestRun_EmptyDestination_ReturnsError(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: "",
@@ -502,7 +504,7 @@ func TestRun_MissingVMXPath_ReturnsError(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     filepath.Join(t.TempDir(), "does-not-exist.vmx"),
 		Destination: t.TempDir(),
@@ -519,7 +521,7 @@ func TestRun_VMXPathIsDirectory_ReturnsError(t *testing.T) {
 
 	vmxAsDir := t.TempDir() // exists, but is a directory -- a misconfigured VMXPath
 
-	_, err := backup.Run(fake, backup.Options{
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxAsDir,
 		Destination: t.TempDir(),
@@ -547,7 +549,7 @@ func TestRun_CompressionAuto_PrefersZstdWhenAvailable(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	result, err := backup.Run(fake, backup.Options{
+	result, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -571,7 +573,7 @@ func TestRun_OutputPermissions_MatchStagingHardening(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	result, err := backup.Run(fake, backup.Options{
+	result, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
 		Destination: t.TempDir(),
@@ -618,4 +620,147 @@ func writeMinimalVMX(t *testing.T) string {
 		t.Fatalf("write vmx: %v", err)
 	}
 	return path
+}
+
+type fakeReporter struct {
+	events []progress.Event
+}
+
+func (r *fakeReporter) Report(e progress.Event) {
+	r.events = append(r.events, e)
+}
+
+func TestRun_HappyPath_ReportsStagesInOrder(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	reporter := &fakeReporter{}
+
+	_, err := backup.Run(t.Context(), fake, reporter, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	wantOrder := []progress.Stage{
+		progress.CheckingTools,
+		progress.Snapshotting,
+		progress.Copying,
+		progress.Merging,
+		progress.Compressing,
+		progress.Checksumming,
+		progress.Done,
+	}
+	var gotOrder []progress.Stage
+	seen := map[progress.Stage]bool{}
+	for _, e := range reporter.events {
+		if !seen[e.Stage] {
+			seen[e.Stage] = true
+			gotOrder = append(gotOrder, e.Stage)
+		}
+	}
+	if len(gotOrder) != len(wantOrder) {
+		t.Fatalf("distinct stages reported = %v, want %v", gotOrder, wantOrder)
+	}
+	for i, stage := range wantOrder {
+		if gotOrder[i] != stage {
+			t.Errorf("stage[%d] = %v, want %v (full order: %v)", i, gotOrder[i], stage, gotOrder)
+		}
+	}
+}
+
+func TestRun_CanceledContext_AbortsBeforeAnyCtrlCall(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	_, err := backup.Run(ctx, fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for a pre-canceled context")
+	}
+
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	if runErr.Stage != progress.CheckingTools {
+		t.Errorf("runErr.Stage = %v, want %v (canceled before any ctrl call)", runErr.Stage, progress.CheckingTools)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("errors.Is(err, context.Canceled) = false, want true")
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; a pre-canceled context must abort before touching ctrl", snapshots)
+	}
+}
+
+func TestRun_SnapshotError_RunErrorStageBelowSnapshotting(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.SnapshotErr = errBoom
+
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error")
+	}
+
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	// Snapshot itself failed, so no snapshot was ever created -- Stage
+	// must NOT be >= Snapshotting, or a caller would wrongly point the
+	// user at `snapback cleanup` for a snapshot that doesn't exist.
+	if runErr.Stage >= progress.Snapshotting {
+		t.Errorf("runErr.Stage = %v, want < %v (Snapshot itself failed, nothing to orphan)", runErr.Stage, progress.Snapshotting)
+	}
+}
+
+func TestRun_DeleteSnapshotError_RunErrorStageAtOrAboveSnapshotting(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.DeleteSnapshotErr = errBoom
+
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error")
+	}
+
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	// The snapshot was taken successfully and DeleteSnapshot (the merge)
+	// is what failed -- a snapshot may still exist on the source VM, so
+	// Stage must be >= Snapshotting to trigger the cleanup pointer.
+	if runErr.Stage < progress.Snapshotting {
+		t.Errorf("runErr.Stage = %v, want >= %v (snapshot exists, merge failed)", runErr.Stage, progress.Snapshotting)
+	}
 }
