@@ -53,6 +53,11 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 		return nil, fmt.Errorf("vmx path: %w", err)
 	}
 
+	guestOS, err := readGuestOS(opts.VMXPath)
+	if err != nil {
+		return nil, fmt.Errorf("read guest OS: %w", err)
+	}
+
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -80,11 +85,6 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	}
 
 	hostSync()
-
-	guestOS, err := readGuestOS(opts.VMXPath)
-	if err != nil {
-		return nil, fmt.Errorf("read guest OS: %w", err)
-	}
 
 	stagingParent := opts.StagingDir
 	if stagingParent == "" {

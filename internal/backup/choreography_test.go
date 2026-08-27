@@ -181,6 +181,45 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	}
 }
 
+// vmxDeletingController wraps vm.FakeVMController and deletes the vmx
+// file as a side effect of a successful Snapshot call. This is a
+// deterministic, root-proof way to detect an ordering regression: it
+// does not depend on permission bits (which root bypasses in some CI
+// environments -- see TestRun_CopyDirPartialFailure_CleansUpStagingDir
+// above), only on whether readGuestOS is called before or after
+// ctrl.Snapshot.
+type vmxDeletingController struct {
+	*vm.FakeVMController
+}
+
+func (c *vmxDeletingController) Snapshot(vmxPath, name string) error {
+	if err := c.FakeVMController.Snapshot(vmxPath, name); err != nil {
+		return err
+	}
+	return os.Remove(vmxPath)
+}
+
+func TestRun_ReadsGuestOSBeforeSnapshot(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	ctrl := &vmxDeletingController{FakeVMController: fake}
+
+	result, err := backup.Run(ctrl, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil; guestOS must be read from the vmx file before Snapshot() runs (this test's fake Snapshot deletes the vmx file afterward to catch ordering regressions)", err)
+	}
+	if result.Manifest.GuestOS != "ubuntu-64" {
+		t.Errorf("Manifest.GuestOS = %q, want %q", result.Manifest.GuestOS, "ubuntu-64")
+	}
+}
+
 func TestRun_NonRunningToolsState_RecordsCrashConsistent(t *testing.T) {
 	vmxPath := writeMinimalVMX(t)
 	fake := vm.NewFakeVMController()
