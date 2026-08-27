@@ -33,7 +33,7 @@ func createArchive(srcDir, destPath, requested string) (string, error) {
 		return "", fmt.Errorf("unknown compression %q", requested)
 	}
 
-	out, err := os.Create(destPath)
+	out, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		return "", fmt.Errorf("create archive: %w", err)
 	}

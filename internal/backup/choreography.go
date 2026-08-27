@@ -103,7 +103,7 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	}
 
 	outputDir := filepath.Join(opts.Destination, archiveID)
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create output dir: %w", err)
 	}
 	succeeded := false

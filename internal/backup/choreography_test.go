@@ -502,6 +502,47 @@ func TestRun_CompressionAuto_PrefersZstdWhenAvailable(t *testing.T) {
 	}
 }
 
+func TestRun_OutputPermissions_MatchStagingHardening(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	result, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	outputInfo, err := os.Stat(result.OutputDir)
+	if err != nil {
+		t.Fatalf("Stat(OutputDir) error = %v", err)
+	}
+	if perm := outputInfo.Mode().Perm(); perm != 0o700 {
+		t.Errorf("OutputDir perm = %o, want %o (matching copyDir's staging-directory hardening)", perm, 0o700)
+	}
+
+	archiveInfo, err := os.Stat(result.ArchivePath)
+	if err != nil {
+		t.Fatalf("Stat(ArchivePath) error = %v", err)
+	}
+	if perm := archiveInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("ArchivePath perm = %o, want %o", perm, 0o600)
+	}
+
+	manifestInfo, err := os.Stat(result.ManifestPath)
+	if err != nil {
+		t.Fatalf("Stat(ManifestPath) error = %v", err)
+	}
+	if perm := manifestInfo.Mode().Perm(); perm != 0o600 {
+		t.Errorf("ManifestPath perm = %o, want %o", perm, 0o600)
+	}
+}
+
 func writeMinimalVMX(t *testing.T) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
