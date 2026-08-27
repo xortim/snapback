@@ -118,7 +118,7 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	}()
 
 	tempArchivePath := filepath.Join(outputDir, "archive.tmp")
-	usedCompression, err := createArchive(stagingRoot, tempArchivePath, opts.Compression)
+	usedCompression, err := createArchive(stagingRoot, tempArchivePath, opts.Compression, nil)
 	if err != nil {
 		return nil, fmt.Errorf("create archive: %w", err)
 	}
