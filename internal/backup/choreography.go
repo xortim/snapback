@@ -228,10 +228,16 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 }
 
 // percentOf returns cumulative/total as a fraction in [0,1], or 0 if
-// total is 0 (an empty bundle -- avoids a division by zero).
+// total is 0 (an empty bundle -- avoids a division by zero). Clamped at
+// 1.0: totalBytes is measured before ctrl.Snapshot() runs, but the
+// snapshot adds delta/.vmsn files to the bundle that the later Copying
+// stage also counts, so cumulative can exceed total on a real VM.
 func percentOf(cumulative, total int64) float64 {
 	if total == 0 {
 		return 0
+	}
+	if cumulative >= total {
+		return 1
 	}
 	return float64(cumulative) / float64(total)
 }

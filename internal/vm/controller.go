@@ -23,6 +23,13 @@ const (
 // implementation backs unit tests with no Fusion install required.
 type Controller interface {
 	CheckToolsState(vmxPath string) (ToolsState, error)
+	// Snapshot must not leave a snapshot behind on the source VM when it
+	// returns a non-nil error. If snapshot creation partially succeeds and
+	// then fails, the implementation is responsible for removing the
+	// partial snapshot before returning the error. internal/backup.Run
+	// relies on this: it treats a Snapshot error as proof no snapshot
+	// exists, used to decide whether to warn the caller about a possible
+	// orphaned snapback-<timestamp> snapshot.
 	Snapshot(vmxPath, name string) error
 	ListSnapshots(vmxPath string) ([]string, error)
 	DeleteSnapshot(vmxPath, name string) error
