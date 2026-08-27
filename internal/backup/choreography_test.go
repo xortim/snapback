@@ -513,6 +513,31 @@ func TestRun_MissingVMXPath_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestRun_VMXPathIsDirectory_ReturnsError(t *testing.T) {
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	vmxAsDir := t.TempDir() // exists, but is a directory -- a misconfigured VMXPath
+
+	_, err := backup.Run(fake, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxAsDir,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for VMXPath pointing at a directory")
+	}
+	if !strings.HasPrefix(err.Error(), "vmx path") {
+		t.Errorf("Run() error = %q, want it prefixed with %q from pre-flight validation, not a low-level file-read error surfacing later", err.Error(), "vmx path")
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxAsDir)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; validation should fail before touching ctrl", snapshots)
+	}
+}
+
 func TestRun_CompressionAuto_PrefersZstdWhenAvailable(t *testing.T) {
 	if _, err := exec.LookPath("zstd"); err != nil {
 		t.Skip("zstd not installed, skipping")

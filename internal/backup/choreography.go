@@ -49,8 +49,12 @@ func Run(ctrl vm.Controller, opts Options) (*Result, error) {
 	if opts.Destination == "" {
 		return nil, fmt.Errorf("destination is required")
 	}
-	if _, err := os.Stat(opts.VMXPath); err != nil {
+	vmxInfo, err := os.Stat(opts.VMXPath)
+	if err != nil {
 		return nil, fmt.Errorf("vmx path: %w", err)
+	}
+	if vmxInfo.IsDir() {
+		return nil, fmt.Errorf("vmx path %q is a directory, want a regular file", opts.VMXPath)
 	}
 
 	guestOS, err := readGuestOS(opts.VMXPath)
