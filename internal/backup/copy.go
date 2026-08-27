@@ -10,8 +10,11 @@ import (
 
 // copyDir recursively copies the contents of src into dst, creating dst
 // and any subdirectories as needed. Regular files are copied byte-for-byte;
-// symlinks are recreated as symlinks (not followed).
-func copyDir(src, dst string) error {
+// symlinks are recreated as symlinks (not followed). If onCopy is
+// non-nil, it is invoked after each regular file finishes copying, with
+// the running total of bytes copied so far across all files.
+func copyDir(src, dst string, onCopy func(cumulativeBytes int64)) error {
+	var cumulative int64
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -37,7 +40,14 @@ func copyDir(src, dst string) error {
 		if err != nil {
 			return err
 		}
-		return copyFile(path, target, info.Mode().Perm())
+		if err := copyFile(path, target, info.Mode().Perm()); err != nil {
+			return err
+		}
+		cumulative += info.Size()
+		if onCopy != nil {
+			onCopy(cumulative)
+		}
+		return nil
 	})
 }
 

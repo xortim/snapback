@@ -22,7 +22,7 @@ func TestCopyDir_CopiesNestedFilesAndPreservesSymlink(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "copy")
-	if err := copyDir(src, dst); err != nil {
+	if err := copyDir(src, dst, nil); err != nil {
 		t.Fatalf("copyDir() error = %v, want nil", err)
 	}
 
@@ -42,8 +42,34 @@ func TestCopyDir_CopiesNestedFilesAndPreservesSymlink(t *testing.T) {
 
 func TestCopyDir_MissingSourceReturnsError(t *testing.T) {
 	dst := t.TempDir()
-	err := copyDir(filepath.Join(t.TempDir(), "does-not-exist"), dst)
+	err := copyDir(filepath.Join(t.TempDir(), "does-not-exist"), dst, nil)
 	if err == nil {
 		t.Fatal("copyDir() error = nil, want error for missing source")
+	}
+}
+
+func TestCopyDir_InvokesOnCopyWithCumulativeBytes(t *testing.T) {
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("12345"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "b.txt"), []byte("1234567890"), 0o644); err != nil {
+		t.Fatalf("write b.txt: %v", err)
+	}
+
+	dst := filepath.Join(t.TempDir(), "copy")
+	var calls []int64
+	if err := copyDir(src, dst, func(cumulativeBytes int64) {
+		calls = append(calls, cumulativeBytes)
+	}); err != nil {
+		t.Fatalf("copyDir() error = %v, want nil", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("onCopy called %d times, want 2 (one per file)", len(calls))
+	}
+	last := calls[len(calls)-1]
+	if last != 15 {
+		t.Errorf("final cumulative bytes = %d, want %d (5 + 10)", last, 15)
 	}
 }
