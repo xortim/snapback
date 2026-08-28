@@ -1,6 +1,6 @@
 # ADR-001: snapback — VM Backup Manager for VMware Fusion
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-12
 **Deciders:** Tim
 
@@ -32,7 +32,7 @@ Vimalin does this well but it's shareware, GUI-only, and opaque about what it's 
 | Component         | Responsibility                                                        | Tech                                                            |
 | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `snapback` binary | Backup/restore choreography, config parsing, status reporting         | Go, [cobra](https://github.com/spf13/cobra) (commands), [koanf](https://github.com/knadh/koanf) (config) |
-| VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, investigate first) or `vmrun` (fallback)   |
+| VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, confirmed as primary) or `vmrun` (fallback) |
 | launchd           | Scheduled execution                                                   | `~/Library/LaunchAgents/com.tim.snapback.plist`                 |
 | xbar plugin       | Menu bar status + manual trigger                                      | Shell script wrapping `snapback status --xbar`                  |
 | Config            | VM list, destination, retention, schedule                             | YAML at `~/.config/snapback/config.yaml`                        |
