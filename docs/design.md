@@ -1,6 +1,6 @@
 # ADR-001: snapback — VM Backup Manager for VMware Fusion
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-08-12
 **Deciders:** Tim
 
@@ -32,7 +32,7 @@ Vimalin does this well but it's shareware, GUI-only, and opaque about what it's 
 | Component         | Responsibility                                                        | Tech                                                            |
 | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `snapback` binary | Backup/restore choreography, config parsing, status reporting         | Go, [cobra](https://github.com/spf13/cobra) (commands), [koanf](https://github.com/knadh/koanf) (config) |
-| VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, investigate first) or `vmrun` (fallback)   |
+| VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, confirmed as primary) or `vmrun` (fallback) |
 | launchd           | Scheduled execution                                                   | `~/Library/LaunchAgents/com.tim.snapback.plist`                 |
 | xbar plugin       | Menu bar status + manual trigger                                      | Shell script wrapping `snapback status --xbar`                  |
 | Config            | VM list, destination, retention, schedule                             | YAML at `~/.config/snapback/config.yaml`                        |
@@ -164,7 +164,7 @@ xbar/SwiftBar gets you 90% of the value — a menu bar icon, a dropdown, click-t
 
 ## Roadmap
 
-- [ ] **Phase 1 — Core CLI:** Confirm `vmcli Snapshot --help` output and whether it supports structured (`-f`) formatting before choosing `vmcli` vs `vmrun` as the backing tool. Confirm `checkToolsState` is present on your installed Fusion version. Define the `VMController` interface (including `CheckToolsState`) and a fake implementation before writing any real shell-out code — write the choreography logic against the fake first. `snapback init`, `run`, `list`, `status` (terminal output only). Tools check → snapshot → sync → copy → compress → checksum → cleanup, single VM at a time.
+- [ ] **Phase 1 — Core CLI (in progress):** ~~Confirm `vmcli Snapshot --help` output and whether it supports structured (`-f`) formatting before choosing `vmcli` vs `vmrun` as the backing tool. Confirm `checkToolsState` is present on your installed Fusion version. Define the `VMController` interface (including `CheckToolsState`) and a fake implementation before writing any real shell-out code — write the choreography logic against the fake first.~~ Done: `vmcli` chosen and confirmed, the `VMController` interface with both a fake and a real `vmcli`-backed implementation, and the full backup choreography engine. Remaining: wire `snapback init`, `run`, `list`, `status` (terminal output only) to that choreography — tools check → snapshot → sync → copy → compress → checksum → cleanup, single VM at a time.
 - [ ] **Phase 2 — Scheduling:** launchd plist generation from config schedules, `snapback run --all`, orphaned-snapshot cleanup command.
 - [ ] **Phase 3 — Restore:** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore.
 - [ ] **Phase 4 — xbar plugin:** `status --xbar` output, plugin script, click-to-run wiring.
