@@ -10,6 +10,15 @@ import (
 // can override it to force a deterministic Run() failure at this step --
 // dirSize has no other seam that fails without relying on permission bits
 // or filesystem races (see CLAUDE.md's testing conventions).
+//
+// Run() calls this once, up front, purely to get a totalBytes denominator
+// for Copying/Compressing progress percentages -- a second full traversal
+// of bundleDir on top of the one copyDir performs later. This is an
+// accepted tradeoff, not an oversight: see ADR-003's "Risks & Open
+// Questions" section (docs/superpowers/specs/2026-08-27-run-progress-context-design.md)
+// for why, and revisit only if real-VM testing shows it's a measurable
+// slowdown (CLAUDE.md's "Known gotchas" section tracks that as an open
+// verification item).
 var dirSize = func(root string) (int64, error) {
 	var total int64
 	err := filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
