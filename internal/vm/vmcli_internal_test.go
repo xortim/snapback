@@ -71,6 +71,21 @@ func TestVMCLIController_CheckToolsState_NoInstallTypeMapsToToolsUnknown(t *test
 	}
 }
 
+func TestVMCLIController_CheckToolsState_NoneInstallTypeMapsToToolsUnknown(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		return []byte(`{"running":false,"runningStatus":"notRunning","installType":"none"}`), nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	got, err := c.CheckToolsState(testVMX)
+	if err != nil {
+		t.Fatalf("CheckToolsState() error = %v, want nil", err)
+	}
+	if got != ToolsUnknown {
+		t.Errorf("CheckToolsState() = %q, want %q (\"none\" is a known no-tools sentinel, not an installed value)", got, ToolsUnknown)
+	}
+}
+
 func TestVMCLIController_CheckToolsState_CommandErrorReturnsStderrMessage(t *testing.T) {
 	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
 		return nil, []byte("vmcli: VMX : 'x.vmx' does not exist!"), errors.New("exit status 255")

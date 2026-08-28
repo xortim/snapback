@@ -100,7 +100,7 @@ func mapToolsState(t toolsQueryResult) ToolsState {
 	switch {
 	case t.Running && t.RunningStatus == "running":
 		return ToolsRunning
-	case t.InstallType != "":
+	case t.InstallType != "" && !strings.EqualFold(t.InstallType, "none"):
 		return ToolsInstalled
 	default:
 		return ToolsUnknown
