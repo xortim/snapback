@@ -33,6 +33,17 @@ type Result struct {
 	Manifest     Manifest
 }
 
+// checkCtx returns a *RunError tagged with stage if ctx is done, or nil
+// otherwise. Centralizes the ctx.Err() check Run performs at each stage
+// boundary so the only thing that varies per call site is which Stage to
+// tag -- see the design doc's discussion of this exact copy-paste risk.
+func checkCtx(ctx context.Context, stage progress.Stage) *RunError {
+	if err := ctx.Err(); err != nil {
+		return &RunError{Stage: stage, Err: err}
+	}
+	return nil
+}
+
 // Run executes the snapshot -> copy -> merge -> archive choreography
 // described in docs/design.md ("Backup choreography") against ctrl,
 // reporting progress.Events to reporter at each stage. The source VM is
@@ -63,8 +74,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	// Stage: CheckingTools -- pre-flight validation, readGuestOS, and
 	// ctrl.CheckToolsState. No ctrl call has happened yet, so any error
 	// here means there is no snapshot to orphan.
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.CheckingTools, Err: err}
+	if runErr := checkCtx(ctx, progress.CheckingTools); runErr != nil {
+		return nil, runErr
 	}
 	if opts.VMName == "" || filepath.Base(opts.VMName) != opts.VMName {
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("invalid VMName %q", opts.VMName)}
@@ -112,8 +123,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	// Snapshotting) -- no snapshot exists yet, so a caller's Stage >=
 	// progress.Snapshotting orphan check must not fire for one. Same
 	// reasoning as the real Snapshot() failure handled a few lines below.
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.CheckingTools, Err: err}
+	if runErr := checkCtx(ctx, progress.CheckingTools); runErr != nil {
+		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Snapshotting, Message: "taking snapshot " + snapshotName})
 	if err := ctrl.Snapshot(opts.VMXPath, snapshotName); err != nil {
@@ -133,8 +144,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 
 	// Stage: Copying
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.Copying, Err: err}
+	if runErr := checkCtx(ctx, progress.Copying); runErr != nil {
+		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Copying, Message: "copying VM bundle to staging"})
 	hostSync()
@@ -154,8 +165,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 
 	// Stage: Merging
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.Merging, Err: err}
+	if runErr := checkCtx(ctx, progress.Merging); runErr != nil {
+		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Merging, Message: "merging snapshot back"})
 	if err := ctrl.DeleteSnapshot(opts.VMXPath, snapshotName); err != nil {
@@ -174,8 +185,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		}
 	}()
 
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.Compressing, Err: err}
+	if runErr := checkCtx(ctx, progress.Compressing); runErr != nil {
+		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Compressing, Message: "compressing archive"})
 	tempArchivePath := filepath.Join(outputDir, "archive.tmp")
@@ -196,8 +207,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 
 	// Stage: Checksumming
-	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.Checksumming, Err: err}
+	if runErr := checkCtx(ctx, progress.Checksumming); runErr != nil {
+		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Checksumming, Message: "checksumming archive"})
 	info, err := os.Stat(archivePath)
