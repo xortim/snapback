@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,20 +170,41 @@ func (c *VMCLIController) snapshotUID(vmxPath, name string) (uid int64, found bo
 	}
 }
 
+// ErrOrphanPossible wraps the error Snapshot returns when a Take failure's
+// cleanup could not be confirmed: the post-failure snapshot lookup itself
+// failed or was ambiguous, or the cleanup Delete call failed. In every
+// other failure case Snapshot's contract (below) still holds -- no
+// snapshot was left behind. internal/backup.Run checks for this with
+// errors.Is and tags its RunError at Stage: Snapshotting (instead of
+// below it) so the caller's orphan warning fires.
+var ErrOrphanPossible = errors.New("snapshot cleanup could not be confirmed; a partial snapshot may remain")
+
 // Snapshot satisfies the Controller.Snapshot contract (internal/vm/controller.go):
 // it must not leave a snapshot behind when it returns an error. vmcli's
 // Take reports a single pass/fail, but if it fails after partially
 // creating the snapshot, this checks for and removes it before returning.
+// When that check or removal can't be confirmed, the returned error wraps
+// ErrOrphanPossible instead of silently claiming success.
 func (c *VMCLIController) Snapshot(vmxPath, name string) error {
 	_, stderr, err := c.run(vmxPath, "Snapshot", "Take", "-d", "snapback automated snapshot", name)
-	if err != nil {
-		takeErr := vmcliError("snapshot", stderr, err)
-		if uid, found, qerr := c.snapshotUID(vmxPath, name); qerr == nil && found {
-			_, _, _ = c.run(vmxPath, "Snapshot", "Delete", strconv.FormatInt(uid, 10))
-		}
+	if err == nil {
+		return nil
+	}
+	takeErr := vmcliError("snapshot", stderr, err)
+
+	uid, found, qerr := c.snapshotUID(vmxPath, name)
+	if qerr != nil {
+		return fmt.Errorf("%w: could not verify whether a partial snapshot remains: %v (original failure: %v)", ErrOrphanPossible, qerr, takeErr)
+	}
+	if !found {
 		return takeErr
 	}
-	return nil
+
+	if _, delStderr, delErr := c.run(vmxPath, "Snapshot", "Delete", strconv.FormatInt(uid, 10)); delErr != nil {
+		cleanupErr := vmcliError("cleanup after failed snapshot", delStderr, delErr)
+		return fmt.Errorf("%w: %v (original failure: %v)", ErrOrphanPossible, cleanupErr, takeErr)
+	}
+	return takeErr
 }
 
 func (c *VMCLIController) ListSnapshots(vmxPath string) ([]string, error) {

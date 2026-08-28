@@ -173,6 +173,57 @@ func TestVMCLIController_Snapshot_FailureWithPartialSnapshot_CleansUpBeforeRetur
 	}
 }
 
+func TestVMCLIController_Snapshot_FailureWithCleanupDeleteFailure_ReturnsErrOrphanPossible(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		switch {
+		case args[1] == "Snapshot" && args[2] == "Take":
+			return nil, []byte("vmcli: snapshot failed partway"), errors.New("exit status 255")
+		case args[1] == "Snapshot" && args[2] == "query":
+			return []byte(`{"currentUID":7,"helperUID":0,"snapshots":[{"displayName":"snapback-1","parentUID":0,"uid":7}]}`), nil, nil
+		case args[1] == "Snapshot" && args[2] == "Delete":
+			return nil, []byte("vmcli: delete failed"), errors.New("exit status 255")
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	err := c.Snapshot(testVMX, "snapback-1")
+	if !errors.Is(err, ErrOrphanPossible) {
+		t.Errorf("Snapshot() error = %v, want errors.Is(err, ErrOrphanPossible) = true", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "snapshot failed partway") {
+		t.Errorf("Snapshot() error = %v, want it to still mention the original Take failure", err)
+	}
+}
+
+func TestVMCLIController_Snapshot_FailureWithAmbiguousCleanupLookup_ReturnsErrOrphanPossible(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		switch {
+		case args[1] == "Snapshot" && args[2] == "Take":
+			return nil, []byte("vmcli: snapshot failed partway"), errors.New("exit status 255")
+		case args[1] == "Snapshot" && args[2] == "query":
+			return []byte(`{"currentUID":7,"helperUID":0,"snapshots":[
+				{"displayName":"snapback-1","parentUID":0,"uid":3},
+				{"displayName":"snapback-1","parentUID":3,"uid":7}
+			]}`), nil, nil
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	err := c.Snapshot(testVMX, "snapback-1")
+	if !errors.Is(err, ErrOrphanPossible) {
+		t.Errorf("Snapshot() error = %v, want errors.Is(err, ErrOrphanPossible) = true", err)
+	}
+	for _, call := range fr.calls {
+		if call[1] == "Snapshot" && call[2] == "Delete" {
+			t.Errorf("run() called Delete %v, want no delete attempt when the cleanup lookup is ambiguous", call)
+		}
+	}
+}
+
 func TestVMCLIController_ListSnapshots_ParsesDisplayNames(t *testing.T) {
 	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
 		return []byte(`{"currentUID":2,"helperUID":0,"snapshots":[
