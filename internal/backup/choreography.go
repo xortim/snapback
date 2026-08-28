@@ -84,7 +84,9 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	bundleDir := filepath.Dir(opts.VMXPath)
 	totalBytes, err := dirSize(bundleDir)
 	if err != nil {
-		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("measure bundle size: %w", err)}
+		// Tagged Copying, not CheckingTools, per ADR-003
+		// (docs/superpowers/specs/2026-08-27-run-progress-context-design.md).
+		return nil, &RunError{Stage: progress.Copying, Err: fmt.Errorf("measure bundle size: %w", err)}
 	}
 
 	now := opts.Now
