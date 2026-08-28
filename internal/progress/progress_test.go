@@ -34,3 +34,17 @@ func TestStages_AreDistinctValues(t *testing.T) {
 		t.Errorf("got %d distinct stages, want 9", len(seen))
 	}
 }
+
+func TestStage_String(t *testing.T) {
+	cases := map[progress.Stage]string{
+		progress.CheckingTools: "checking tools",
+		progress.Snapshotting:  "snapshotting",
+		progress.Done:          "done",
+		progress.Stage(99):     "stage(99)",
+	}
+	for stage, want := range cases {
+		if got := stage.String(); got != want {
+			t.Errorf("Stage(%d).String() = %q, want %q", stage, got, want)
+		}
+	}
+}
