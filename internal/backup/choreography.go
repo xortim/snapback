@@ -102,9 +102,12 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("check tools state: %w", err)}
 	}
 
-	// Stage: Snapshotting
+	// Checked here, before Snapshot() runs, but tagged CheckingTools (not
+	// Snapshotting) -- no snapshot exists yet, so a caller's Stage >=
+	// progress.Snapshotting orphan check must not fire for one. Same
+	// reasoning as the real Snapshot() failure handled a few lines below.
 	if err := ctx.Err(); err != nil {
-		return nil, &RunError{Stage: progress.Snapshotting, Err: err}
+		return nil, &RunError{Stage: progress.CheckingTools, Err: err}
 	}
 	reporter.Report(progress.Event{Stage: progress.Snapshotting, Message: "taking snapshot " + snapshotName})
 	if err := ctrl.Snapshot(opts.VMXPath, snapshotName); err != nil {

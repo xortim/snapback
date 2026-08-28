@@ -222,6 +222,56 @@ func TestRun_ReadsGuestOSBeforeSnapshot(t *testing.T) {
 	}
 }
 
+// cancelingController wraps vm.FakeVMController and cancels ctx as a side
+// effect of a successful CheckToolsState call, so a test can deterministically
+// land ctx's cancellation in the window between CheckToolsState returning and
+// Snapshot being called -- the exact window choreography.go:105-108 checks.
+type cancelingController struct {
+	*vm.FakeVMController
+	cancel context.CancelFunc
+}
+
+func (c *cancelingController) CheckToolsState(vmxPath string) (vm.ToolsState, error) {
+	state, err := c.FakeVMController.CheckToolsState(vmxPath)
+	c.cancel()
+	return state, err
+}
+
+func TestRun_ContextCanceledAfterCheckToolsState_StageBelowSnapshotting(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	ctx, cancel := context.WithCancel(t.Context())
+	ctrl := &cancelingController{FakeVMController: fake, cancel: cancel}
+
+	_, err := backup.Run(ctx, ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error for context canceled after CheckToolsState")
+	}
+
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	// No snapshot exists yet at this point -- Stage must be below
+	// Snapshotting, or a caller's orphan-cleanup pointer wrongly fires for
+	// a snapshot that was never created.
+	if runErr.Stage >= progress.Snapshotting {
+		t.Errorf("runErr.Stage = %v, want < %v (canceled before Snapshot() ran, nothing to orphan)", runErr.Stage, progress.Snapshotting)
+	}
+
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; canceled before Snapshot() should have run", snapshots)
+	}
+}
+
 func TestRun_NonRunningToolsState_RecordsCrashConsistent(t *testing.T) {
 	vmxPath := writeMinimalVMX(t)
 	fake := vm.NewFakeVMController()
