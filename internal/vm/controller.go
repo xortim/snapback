@@ -29,7 +29,9 @@ type Controller interface {
 	// partial snapshot before returning the error. internal/backup.Run
 	// relies on this: it treats a Snapshot error as proof no snapshot
 	// exists, used to decide whether to warn the caller about a possible
-	// orphaned snapback-<timestamp> snapshot.
+	// orphaned snapback-<timestamp> snapshot -- unless that error wraps
+	// vm.ErrOrphanPossible (internal/vm/vmcli.go), which means cleanup
+	// itself could not be confirmed and a snapshot may actually remain.
 	Snapshot(vmxPath, name string) error
 	ListSnapshots(vmxPath string) ([]string, error)
 	DeleteSnapshot(vmxPath, name string) error

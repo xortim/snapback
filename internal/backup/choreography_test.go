@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -784,6 +785,34 @@ func TestRun_SnapshotError_RunErrorStageBelowSnapshotting(t *testing.T) {
 	// user at `snapback cleanup` for a snapshot that doesn't exist.
 	if runErr.Stage >= progress.Snapshotting {
 		t.Errorf("runErr.Stage = %v, want < %v (Snapshot itself failed, nothing to orphan)", runErr.Stage, progress.Snapshotting)
+	}
+}
+
+func TestRun_SnapshotError_OrphanPossible_RunErrorStageAtOrAboveSnapshotting(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.SnapshotErr = fmt.Errorf("cleanup failed: %w", vm.ErrOrphanPossible)
+
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want error")
+	}
+
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	// Cleanup couldn't be confirmed, so a snapshot may actually remain --
+	// Stage must be >= Snapshotting so a caller's orphan check fires and
+	// points the user at `snapback cleanup`.
+	if runErr.Stage < progress.Snapshotting {
+		t.Errorf("runErr.Stage = %v, want >= %v (cleanup could not be confirmed)", runErr.Stage, progress.Snapshotting)
 	}
 }
 
