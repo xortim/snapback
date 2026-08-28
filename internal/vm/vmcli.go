@@ -3,7 +3,6 @@ package vm
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -97,6 +96,11 @@ type toolsQueryResult struct {
 // quiesce step off, proceed crash-consistent), so under-distinguishing
 // this case is safe, not just expedient. Revisit once the integration
 // suite runs against a guest with no tools installed at all.
+//
+// installType "none" (case-insensitive) is treated as no-tools rather
+// than installed: it's the literal sentinel vmrun's equivalent field is
+// known to report for a Tools-less guest, and vmcli's own no-tools shape
+// is unconfirmed, so this guards against vmcli doing the same.
 func mapToolsState(t toolsQueryResult) ToolsState {
 	switch {
 	case t.Running && t.RunningStatus == "running":
@@ -170,21 +174,15 @@ func (c *VMCLIController) snapshotUID(vmxPath, name string) (uid int64, found bo
 	}
 }
 
-// ErrOrphanPossible wraps the error Snapshot returns when a Take failure's
-// cleanup could not be confirmed: the post-failure snapshot lookup itself
-// failed or was ambiguous, or the cleanup Delete call failed. In every
-// other failure case Snapshot's contract (below) still holds -- no
-// snapshot was left behind. internal/backup.Run checks for this with
-// errors.Is and tags its RunError at Stage: Snapshotting (instead of
-// below it) so the caller's orphan warning fires.
-var ErrOrphanPossible = errors.New("snapshot cleanup could not be confirmed; a partial snapshot may remain")
-
 // Snapshot satisfies the Controller.Snapshot contract (internal/vm/controller.go):
 // it must not leave a snapshot behind when it returns an error. vmcli's
 // Take reports a single pass/fail, but if it fails after partially
 // creating the snapshot, this checks for and removes it before returning.
 // When that check or removal can't be confirmed, the returned error wraps
-// ErrOrphanPossible instead of silently claiming success.
+// ErrOrphanPossible instead of silently claiming success. Errors are
+// joined with %w (not %v) throughout so errors.Is/errors.As still see
+// qerr/cleanupErr/takeErr's own chains (e.g. the underlying
+// *exec.ExitError vmcliError falls back to) from outside this package.
 func (c *VMCLIController) Snapshot(vmxPath, name string) error {
 	_, stderr, err := c.run(vmxPath, "Snapshot", "Take", "-d", "snapback automated snapshot", name)
 	if err == nil {
@@ -194,7 +192,7 @@ func (c *VMCLIController) Snapshot(vmxPath, name string) error {
 
 	uid, found, qerr := c.snapshotUID(vmxPath, name)
 	if qerr != nil {
-		return fmt.Errorf("%w: could not verify whether a partial snapshot remains: %v (original failure: %v)", ErrOrphanPossible, qerr, takeErr)
+		return fmt.Errorf("%w: could not verify whether a partial snapshot remains: %w (original failure: %w)", ErrOrphanPossible, qerr, takeErr)
 	}
 	if !found {
 		return takeErr
@@ -202,7 +200,7 @@ func (c *VMCLIController) Snapshot(vmxPath, name string) error {
 
 	if _, delStderr, delErr := c.run(vmxPath, "Snapshot", "Delete", strconv.FormatInt(uid, 10)); delErr != nil {
 		cleanupErr := vmcliError("cleanup after failed snapshot", delStderr, delErr)
-		return fmt.Errorf("%w: %v (original failure: %v)", ErrOrphanPossible, cleanupErr, takeErr)
+		return fmt.Errorf("%w: %w (original failure: %w)", ErrOrphanPossible, cleanupErr, takeErr)
 	}
 	return takeErr
 }

@@ -86,6 +86,21 @@ func TestVMCLIController_CheckToolsState_NoneInstallTypeMapsToToolsUnknown(t *te
 	}
 }
 
+func TestVMCLIController_CheckToolsState_MixedCaseNoneInstallTypeMapsToToolsUnknown(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		return []byte(`{"running":false,"runningStatus":"notRunning","installType":"NoNe"}`), nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	got, err := c.CheckToolsState(testVMX)
+	if err != nil {
+		t.Fatalf("CheckToolsState() error = %v, want nil", err)
+	}
+	if got != ToolsUnknown {
+		t.Errorf("CheckToolsState() = %q, want %q (the \"none\" sentinel check is case-insensitive)", got, ToolsUnknown)
+	}
+}
+
 func TestVMCLIController_CheckToolsState_CommandErrorReturnsStderrMessage(t *testing.T) {
 	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
 		return nil, []byte("vmcli: VMX : 'x.vmx' does not exist!"), errors.New("exit status 255")
@@ -133,6 +148,9 @@ func TestVMCLIController_Snapshot_FailureWithNoPartialSnapshot_ReturnsErrorWitho
 	if err == nil || !strings.Contains(err.Error(), "snapshot failed") {
 		t.Errorf("Snapshot() error = %v, want it to contain the underlying failure", err)
 	}
+	if errors.Is(err, ErrOrphanPossible) {
+		t.Errorf("Snapshot() error = %v, want errors.Is(err, ErrOrphanPossible) = false (no partial snapshot was ever found)", err)
+	}
 	for _, call := range fr.calls {
 		if call[1] == "Snapshot" && call[2] == "Delete" {
 			t.Errorf("run() called Delete %v, want no cleanup delete when no partial snapshot exists", call)
@@ -158,6 +176,9 @@ func TestVMCLIController_Snapshot_FailureWithPartialSnapshot_CleansUpBeforeRetur
 	err := c.Snapshot(testVMX, "snapback-1")
 	if err == nil || !strings.Contains(err.Error(), "snapshot failed partway") {
 		t.Errorf("Snapshot() error = %v, want it to contain the underlying failure", err)
+	}
+	if errors.Is(err, ErrOrphanPossible) {
+		t.Errorf("Snapshot() error = %v, want errors.Is(err, ErrOrphanPossible) = false (cleanup succeeded)", err)
 	}
 	var deleted bool
 	for _, call := range fr.calls {
@@ -220,6 +241,33 @@ func TestVMCLIController_Snapshot_FailureWithAmbiguousCleanupLookup_ReturnsErrOr
 	for _, call := range fr.calls {
 		if call[1] == "Snapshot" && call[2] == "Delete" {
 			t.Errorf("run() called Delete %v, want no delete attempt when the cleanup lookup is ambiguous", call)
+		}
+	}
+}
+
+func TestVMCLIController_Snapshot_FailureWithCleanupQueryError_ReturnsErrOrphanPossible(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		switch {
+		case args[1] == "Snapshot" && args[2] == "Take":
+			return nil, []byte("vmcli: snapshot failed partway"), errors.New("exit status 255")
+		case args[1] == "Snapshot" && args[2] == "query":
+			return nil, []byte("vmcli: VMX : 'x.vmx' does not exist!"), errors.New("exit status 255")
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	err := c.Snapshot(testVMX, "snapback-1")
+	if !errors.Is(err, ErrOrphanPossible) {
+		t.Errorf("Snapshot() error = %v, want errors.Is(err, ErrOrphanPossible) = true", err)
+	}
+	if err == nil || !strings.Contains(err.Error(), "does not exist") {
+		t.Errorf("Snapshot() error = %v, want it to mention the cleanup lookup's own failure", err)
+	}
+	for _, call := range fr.calls {
+		if call[1] == "Snapshot" && call[2] == "Delete" {
+			t.Errorf("run() called Delete %v, want no delete attempt when the cleanup lookup itself errored", call)
 		}
 	}
 }
