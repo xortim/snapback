@@ -2,6 +2,7 @@ package backup
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -135,11 +136,19 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 	reporter.Report(progress.Event{Stage: progress.Snapshotting, Message: "taking snapshot " + snapshotName})
 	if err := ctrl.Snapshot(opts.VMXPath, snapshotName); err != nil {
-		// Snapshot() itself failed, so no snapshot was ever created --
-		// tag this below progress.Snapshotting (not at it) so a caller's
-		// Stage >= progress.Snapshotting orphan check doesn't wrongly
-		// point at `snapback cleanup` for a snapshot that doesn't exist.
-		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("snapshot: %w", err)}
+		// Snapshot() itself failed. Ordinarily that means no snapshot was
+		// ever created, so this is tagged below progress.Snapshotting -- a
+		// caller's Stage >= progress.Snapshotting orphan check must not
+		// wrongly point at `snapback cleanup` for a snapshot that doesn't
+		// exist. But if the implementation couldn't confirm cleanup
+		// succeeded (vm.ErrOrphanPossible), a partial snapshot may actually
+		// remain, so this is tagged at Snapshotting instead so that check
+		// does fire.
+		stage := progress.CheckingTools
+		if errors.Is(err, vm.ErrOrphanPossible) {
+			stage = progress.Snapshotting
+		}
+		return nil, &RunError{Stage: stage, Err: fmt.Errorf("snapshot: %w", err)}
 	}
 
 	snapshots, err := ctrl.ListSnapshots(opts.VMXPath)
