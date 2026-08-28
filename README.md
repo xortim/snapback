@@ -11,10 +11,13 @@ Go binary you can read, test, and trust.
 
 ## Status
 
-Pre-implementation. Design is settled, phase 1 (core CLI) is next.
-See [`docs/design.md`](docs/design.md) for the full ADR — architecture,
-choreography, config schema, risks, and the open questions still worth
-verifying locally.
+Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
+sync → copy → merge → archive → checksum), config loading, and the
+`VMController` interface (backed by a fake for tests) are implemented;
+the `init`/`run`/`list`/`status` CLI commands are scaffolded but not yet
+wired to that choreography. See [`docs/design.md`](docs/design.md) for
+the full ADR — architecture, choreography, config schema, risks, and the
+open questions still worth verifying locally.
 
 ## Why this exists
 
@@ -29,7 +32,7 @@ disk images.
 
 - macOS
 - VMware Fusion (Player or Pro — this doesn't clone, so edition doesn't gate the mechanism)
-- Go 1.22+ (build only)
+- Go 1.26.5+ (build only; see `go.mod`)
 - [xbar](https://xbarapp.com/) or [SwiftBar](https://swiftbar.app/), for the menu bar UI
 - `zstd` (optional — `brew install zstd`; falls back to gzip if absent)
 
