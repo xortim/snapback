@@ -13,8 +13,9 @@ Go binary you can read, test, and trust.
 
 Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
 sync → copy → merge → archive → checksum), config loading, and the
-`VMController` interface (backed by a fake for tests) are implemented;
-the `init`/`run`/`list`/`status` CLI commands are scaffolded but not yet
+`VMController` interface — with both a fake for unit tests and a real
+`vmcli`-backed implementation — are implemented; the
+`init`/`run`/`list`/`status` CLI commands are scaffolded but not yet
 wired to that choreography. See [`docs/design.md`](docs/design.md) for
 the full ADR — architecture, choreography, config schema, risks, and the
 open questions still worth verifying locally.
