@@ -142,18 +142,31 @@ func (c *VMCLIController) querySnapshots(vmxPath string) ([]snapshotEntry, error
 
 // snapshotUID looks up name's uid via querySnapshots. vmcli's Snapshot
 // Delete takes a uid, not a name (unlike vmrun) -- every delete goes
-// through this lookup first.
+// through this lookup first. Display names are not guaranteed unique
+// (e.g. an unretired orphan from a previous run sharing a same-second
+// timestamp name with a new one), so more than one match is reported as
+// an error rather than silently picking the first one.
 func (c *VMCLIController) snapshotUID(vmxPath, name string) (uid int64, found bool, err error) {
 	snapshots, err := c.querySnapshots(vmxPath)
 	if err != nil {
 		return 0, false, err
 	}
+	var matchUID int64
+	matches := 0
 	for _, s := range snapshots {
 		if s.DisplayName == name {
-			return s.UID, true, nil
+			matchUID = s.UID
+			matches++
 		}
 	}
-	return 0, false, nil
+	switch matches {
+	case 0:
+		return 0, false, nil
+	case 1:
+		return matchUID, true, nil
+	default:
+		return 0, false, fmt.Errorf("snapshot name %q is ambiguous: %d snapshots on %q share this display name", name, matches, vmxPath)
+	}
 }
 
 // Snapshot satisfies the Controller.Snapshot contract (internal/vm/controller.go):

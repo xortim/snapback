@@ -258,6 +258,30 @@ func TestVMCLIController_DeleteSnapshot_NotFoundReturnsErrorWithoutCallingDelete
 	}
 }
 
+func TestVMCLIController_DeleteSnapshot_AmbiguousNameReturnsErrorWithoutDeleting(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		if args[1] == "Snapshot" && args[2] == "query" {
+			return []byte(`{"currentUID":5,"helperUID":0,"snapshots":[
+				{"displayName":"snapback-1","parentUID":0,"uid":3},
+				{"displayName":"snapback-1","parentUID":3,"uid":5}
+			]}`), nil, nil
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	err := c.DeleteSnapshot(testVMX, "snapback-1")
+	if err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("DeleteSnapshot() error = %v, want it to report the ambiguous name", err)
+	}
+	for _, call := range fr.calls {
+		if call[1] == "Snapshot" && call[2] == "Delete" {
+			t.Errorf("run() called Delete %v, want no delete when the target name is ambiguous", call)
+		}
+	}
+}
+
 func TestFindVMCLI_EnvOverrideTakesPrecedence(t *testing.T) {
 	t.Setenv("SNAPBACK_VMCLI_PATH", "/custom/vmcli")
 
