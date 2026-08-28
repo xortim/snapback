@@ -12,9 +12,11 @@ package vm_test
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/xortim/snapback/internal/vm"
@@ -65,7 +67,7 @@ func TestIntegration_SnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSnapshots() error = %v", err)
 	}
-	if !contains(snapshots, name) {
+	if !slices.Contains(snapshots, name) {
 		t.Fatalf("ListSnapshots() = %v, want it to contain %q", snapshots, name)
 	}
 
@@ -77,7 +79,7 @@ func TestIntegration_SnapshotLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSnapshots() error = %v", err)
 	}
-	if contains(snapshots, name) {
+	if slices.Contains(snapshots, name) {
 		t.Fatalf("ListSnapshots() = %v, want it to no longer contain %q after delete", snapshots, name)
 	}
 }
@@ -132,14 +134,5 @@ func sha256File(path string) (string, error) {
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
 	}
-	return string(h.Sum(nil)), nil
-}
-
-func contains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
