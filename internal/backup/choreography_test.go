@@ -814,3 +814,20 @@ func TestRun_DeleteSnapshotError_RunErrorStageAtOrAboveSnapshotting(t *testing.T
 		t.Errorf("runErr.Stage = %v, want >= %v (snapshot exists, merge failed)", runErr.Stage, progress.Snapshotting)
 	}
 }
+
+func TestRun_NilReporter_DoesNotPanic(t *testing.T) {
+	vmxPath := writeMinimalVMX(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	_, err := backup.Run(t.Context(), fake, nil, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil (a nil reporter should default to a no-op, not panic)", err)
+	}
+}

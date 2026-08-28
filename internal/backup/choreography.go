@@ -56,6 +56,10 @@ type Result struct {
 // a harmless no-op in that case rather than a precise signal, which is
 // an accepted simplification (see ADR-003's Risks section).
 func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, opts Options) (*Result, error) {
+	if reporter == nil {
+		reporter = progress.NoOpReporter{}
+	}
+
 	// Stage: CheckingTools -- pre-flight validation, readGuestOS, and
 	// ctrl.CheckToolsState. No ctrl call has happened yet, so any error
 	// here means there is no snapshot to orphan.
