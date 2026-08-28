@@ -20,8 +20,10 @@ var lookZstd = func() (string, error) { return exec.LookPath("zstd") }
 // createArchive tars srcDir's contents and compresses the result to
 // destPath. requested is "zstd", "gzip", or "" (prefer zstd, fall back to
 // gzip if the zstd binary isn't on PATH). Returns which compression was
-// actually used.
-func createArchive(srcDir, destPath, requested string) (string, error) {
+// actually used. If onRead is non-nil, it is invoked as bytes are read
+// from srcDir's files, with the running cumulative total across all
+// files.
+func createArchive(srcDir, destPath, requested string, onRead func(cumulativeBytes int64)) (string, error) {
 	useZstd := false
 	switch requested {
 	case "gzip":
@@ -39,7 +41,7 @@ func createArchive(srcDir, destPath, requested string) (string, error) {
 	}
 
 	if useZstd {
-		if err := tarToZstd(srcDir, out); err != nil {
+		if err := tarToZstd(srcDir, out, onRead); err != nil {
 			_ = out.Close()
 			return "", err
 		}
@@ -50,7 +52,7 @@ func createArchive(srcDir, destPath, requested string) (string, error) {
 	}
 
 	gz := gzip.NewWriter(out)
-	if err := tarTo(srcDir, gz); err != nil {
+	if err := tarTo(srcDir, gz, onRead); err != nil {
 		_ = gz.Close()
 		_ = out.Close()
 		return "", err
@@ -67,7 +69,7 @@ func createArchive(srcDir, destPath, requested string) (string, error) {
 
 // tarToZstd streams a tar of srcDir through the external zstd binary,
 // writing the compressed result to out.
-func tarToZstd(srcDir string, out io.Writer) error {
+func tarToZstd(srcDir string, out io.Writer, onRead func(cumulativeBytes int64)) error {
 	cmd := exec.Command("zstd", "-q")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -81,7 +83,7 @@ func tarToZstd(srcDir string, out io.Writer) error {
 		return fmt.Errorf("start zstd: %w", err)
 	}
 
-	tarErr := tarTo(srcDir, stdin)
+	tarErr := tarTo(srcDir, stdin, onRead)
 	closeErr := stdin.Close()
 	waitErr := cmd.Wait()
 
@@ -104,9 +106,11 @@ func tarToZstd(srcDir string, out io.Writer) error {
 // tarTo writes a tar stream of srcDir's contents to w. The root directory
 // itself is not included as an entry, only its contents (with paths
 // relative to srcDir) — the caller controls wrapping by choosing what
-// srcDir points at.
-func tarTo(srcDir string, w io.Writer) error {
+// srcDir points at. If onRead is non-nil, it is invoked as file bytes are
+// read, with the running cumulative total across all files.
+func tarTo(srcDir string, w io.Writer, onRead func(cumulativeBytes int64)) error {
 	tw := tar.NewWriter(w)
+	var cumulative int64
 
 	walkErr := filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -151,13 +155,17 @@ func tarTo(srcDir string, w io.Writer) error {
 			if err != nil {
 				return err
 			}
-			_, copyErr := io.Copy(tw, f)
+			n, copyErr := io.Copy(tw, f)
 			closeErr := f.Close()
 			if copyErr != nil {
 				return copyErr
 			}
 			if closeErr != nil {
 				return closeErr
+			}
+			cumulative += n
+			if onRead != nil {
+				onRead(cumulative)
 			}
 		}
 		return nil
