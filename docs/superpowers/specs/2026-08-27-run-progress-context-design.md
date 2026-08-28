@@ -204,9 +204,13 @@ func dirSize(root string) (int64, error)
 
 `Run()` calls `dirSize(bundleDir)` once, right after `readGuestOS`,
 storing the result as `totalBytes`. (If `dirSize` fails, `Run()` returns
-a `RunError{Stage: Copying, Err: ...}` — progress measurement failing is
-treated as a real error, not silently skipped, since a wrong-but-present
-`Percent` would be worse than an explicit failure here.)
+a `RunError{Stage: CheckingTools, Err: ...}` — progress measurement
+failing is treated as a real error, not silently skipped, since a
+wrong-but-present `Percent` would be worse than an explicit failure
+here.) `readGuestOS` and `dirSize` both execute before `ctrl.Snapshot()`
+runs — in the `CheckingTools` window, not inside `Copying`'s — per the
+reordering in commit `6e2d19f` that moved them earlier to shrink the
+orphaned-snapshot window, so a `dirSize` failure is tagged accordingly.
 
 `copyDir` and `createArchive` each gain an optional, nil-safe callback
 parameter:

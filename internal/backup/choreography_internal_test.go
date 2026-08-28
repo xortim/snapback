@@ -16,7 +16,7 @@ import (
 
 var errDirSizeBoom = errors.New("boom")
 
-func TestRun_DirSizeError_RunErrorStageIsCopying(t *testing.T) {
+func TestRun_DirSizeError_RunErrorStageIsCheckingTools(t *testing.T) {
 	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
 	if err := os.MkdirAll(bundle, 0o755); err != nil {
 		t.Fatalf("mkdir bundle: %v", err)
@@ -47,7 +47,14 @@ func TestRun_DirSizeError_RunErrorStageIsCopying(t *testing.T) {
 	if !errors.As(err, &runErr) {
 		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
 	}
-	if runErr.Stage != progress.Copying {
-		t.Errorf("runErr.Stage = %v, want %v (per ADR-003: dirSize failure is tagged Copying)", runErr.Stage, progress.Copying)
+	if runErr.Stage != progress.CheckingTools {
+		t.Errorf("runErr.Stage = %v, want %v (dirSize runs before any ctrl call, nothing to orphan)", runErr.Stage, progress.CheckingTools)
+	}
+
+	// dirSize fails before CheckToolsState/Snapshot ever run -- no
+	// snapshot should exist, confirming the Stage tag above.
+	snapshots, _ := fake.ListSnapshots(vmxPath)
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; dirSize should fail before Snapshot() ran", snapshots)
 	}
 }

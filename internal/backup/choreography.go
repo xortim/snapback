@@ -99,9 +99,16 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	bundleDir := filepath.Dir(opts.VMXPath)
 	totalBytes, err := dirSize(bundleDir)
 	if err != nil {
-		// Tagged Copying, not CheckingTools, per ADR-003
-		// (docs/superpowers/specs/2026-08-27-run-progress-context-design.md).
-		return nil, &RunError{Stage: progress.Copying, Err: fmt.Errorf("measure bundle size: %w", err)}
+		// Tagged CheckingTools, not Copying -- dirSize runs here, before
+		// ctrl.CheckToolsState and well before ctrl.Snapshot, so no ctrl
+		// call has happened yet and there is nothing to orphan. Same
+		// reasoning as the pre-Snapshot ctx.Err() check below. ADR-003
+		// (docs/superpowers/specs/2026-08-27-run-progress-context-design.md)
+		// originally said Copying, written before readGuestOS/dirSize were
+		// moved ahead of ctrl.Snapshot to shrink the orphaned-snapshot
+		// window (commit 6e2d19f); an earlier fix implemented that stale
+		// text literally, which this corrects.
+		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("measure bundle size: %w", err)}
 	}
 
 	now := opts.Now
