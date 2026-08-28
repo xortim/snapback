@@ -217,3 +217,38 @@ func assertTarContains(t *testing.T, r io.Reader, wantName, wantContent string) 
 		return
 	}
 }
+
+func TestCreateArchive_OnReadFiresOncePerFile(t *testing.T) {
+	srcDir := t.TempDir()
+	// Larger than io.Copy's internal ~32KB buffer -- under the old
+	// per-buffer-read behavior this alone would have produced multiple
+	// onRead calls for a single file.
+	content := bytes.Repeat([]byte("A"), 100*1024)
+	if err := os.WriteFile(filepath.Join(srcDir, "big.txt"), content, 0o644); err != nil {
+		t.Fatalf("write big.txt: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "small.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write small.txt: %v", err)
+	}
+	destPath := filepath.Join(t.TempDir(), "archive.out")
+
+	var calls []int64
+	_, err := createArchive(srcDir, destPath, "gzip", func(cumulativeBytes int64) {
+		calls = append(calls, cumulativeBytes)
+	})
+	if err != nil {
+		t.Fatalf("createArchive() error = %v, want nil", err)
+	}
+
+	if len(calls) != 2 {
+		t.Fatalf("onRead called %d times, want 2 (one per file, not once per ~32KB read buffer): %v", len(calls), calls)
+	}
+	wantAfterBig := int64(len(content))
+	if calls[0] != wantAfterBig {
+		t.Errorf("calls[0] = %d, want %d (big.txt's full size once it finishes)", calls[0], wantAfterBig)
+	}
+	wantAfterSmall := wantAfterBig + 5
+	if calls[1] != wantAfterSmall {
+		t.Errorf("calls[1] = %d, want %d (big.txt + small.txt)", calls[1], wantAfterSmall)
+	}
+}

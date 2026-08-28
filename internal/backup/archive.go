@@ -103,23 +103,6 @@ func tarToZstd(srcDir string, out io.Writer, onRead func(cumulativeBytes int64))
 	return nil
 }
 
-// countingReader wraps r, invoking onRead with the cumulative byte count
-// (shared across every countingReader via base) after each non-empty
-// Read.
-type countingReader struct {
-	r      io.Reader
-	base   *int64
-	onRead func(cumulativeBytes int64)
-}
-
-func (c *countingReader) Read(p []byte) (int, error) {
-	n, err := c.r.Read(p)
-	if n > 0 {
-		*c.base += int64(n)
-		c.onRead(*c.base)
-	}
-	return n, err
-}
 
 // tarTo writes a tar stream of srcDir's contents to w. The root directory
 // itself is not included as an entry, only its contents (with paths
@@ -173,17 +156,17 @@ func tarTo(srcDir string, w io.Writer, onRead func(cumulativeBytes int64)) error
 			if err != nil {
 				return err
 			}
-			var src io.Reader = f
-			if onRead != nil {
-				src = &countingReader{r: f, base: &cumulative, onRead: onRead}
-			}
-			_, copyErr := io.Copy(tw, src)
+			n, copyErr := io.Copy(tw, f)
 			closeErr := f.Close()
 			if copyErr != nil {
 				return copyErr
 			}
 			if closeErr != nil {
 				return closeErr
+			}
+			cumulative += n
+			if onRead != nil {
+				onRead(cumulative)
 			}
 		}
 		return nil
