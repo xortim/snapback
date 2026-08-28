@@ -103,7 +103,6 @@ func tarToZstd(srcDir string, out io.Writer, onRead func(cumulativeBytes int64))
 	return nil
 }
 
-
 // tarTo writes a tar stream of srcDir's contents to w. The root directory
 // itself is not included as an entry, only its contents (with paths
 // relative to srcDir) — the caller controls wrapping by choosing what
