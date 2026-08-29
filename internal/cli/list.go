@@ -40,14 +40,9 @@ func newListCmdWithDeps(deps listDeps) *cobra.Command {
 }
 
 func runList(cmd *cobra.Command, deps listDeps) error {
-	configPath, err := cmd.Flags().GetString("config")
+	cfg, _, err := loadConfigForCmd(cmd, deps.loadConfig)
 	if err != nil {
 		return err
-	}
-
-	cfg, err := deps.loadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
 	}
 
 	archives, err := deps.listArchives(cfg.Destination)
