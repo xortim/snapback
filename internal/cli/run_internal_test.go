@@ -69,45 +69,55 @@ func TestRunCmd_MissingVMFlag_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestRunCmd_ConfigLoadError_SuppressesUsage(t *testing.T) {
-	root := newTestRoot(runDeps{
-		loadConfig: func(path string) (*config.Config, error) { return nil, errBoom },
-		newController: func() (vm.Controller, error) {
-			t.Fatal("newController should not be called")
-			return nil, nil
+func TestRunCmd_DependencyError_IsWrappedAndSuppressesUsage(t *testing.T) {
+	tests := []struct {
+		name string
+		deps func(t *testing.T) runDeps
+	}{
+		{
+			name: "config load error",
+			deps: func(t *testing.T) runDeps {
+				return runDeps{
+					loadConfig: func(path string) (*config.Config, error) { return nil, errBoom },
+					newController: func() (vm.Controller, error) {
+						t.Fatal("newController should not be called")
+						return nil, nil
+					},
+				}
+			},
 		},
-	})
-	root.SetArgs([]string{"run", "--vm", "myvm"})
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err == nil {
-		t.Fatal("Execute() error = nil, want a wrapped config load error")
-	}
-	if strings.Contains(out.String(), "Usage:") {
-		t.Errorf("stdout = %q, want no usage text for an operational error", out.String())
-	}
-}
-
-func TestRunCmd_ConfigLoadError_IsWrapped(t *testing.T) {
-	root := newTestRoot(runDeps{
-		loadConfig: func(path string) (*config.Config, error) { return nil, errBoom },
-		newController: func() (vm.Controller, error) {
-			t.Fatal("newController should not be called")
-			return nil, nil
+		{
+			name: "controller connect error",
+			deps: func(t *testing.T) runDeps {
+				return runDeps{
+					loadConfig: func(path string) (*config.Config, error) {
+						return &config.Config{VMs: []config.VM{{Name: "myvm"}}}, nil
+					},
+					newController: func() (vm.Controller, error) { return nil, errBoom },
+				}
+			},
 		},
-	})
-	root.SetArgs([]string{"run", "--vm", "myvm"})
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want a wrapped config load error")
 	}
-	if !errors.Is(err, errBoom) {
-		t.Errorf("Execute() error = %v, want it to wrap errBoom", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			root := newTestRoot(tt.deps(t))
+			root.SetArgs([]string{"run", "--vm", "myvm"})
+			var out bytes.Buffer
+			root.SetOut(&out)
+			root.SetErr(&bytes.Buffer{})
+
+			err := root.Execute()
+			if err == nil {
+				t.Fatal("Execute() error = nil, want a wrapped error")
+			}
+			if !errors.Is(err, errBoom) {
+				t.Errorf("Execute() error = %v, want it to wrap errBoom", err)
+			}
+			if strings.Contains(out.String(), "Usage:") {
+				t.Errorf("stdout = %q, want no usage text for an operational error", out.String())
+			}
+		})
 	}
 }
 
@@ -131,26 +141,6 @@ func TestRunCmd_UnknownVMName_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "myvm") {
 		t.Errorf("Execute() error = %v, want it to mention the requested VM name", err)
-	}
-}
-
-func TestRunCmd_ControllerConnectError_IsWrapped(t *testing.T) {
-	root := newTestRoot(runDeps{
-		loadConfig: func(path string) (*config.Config, error) {
-			return &config.Config{VMs: []config.VM{{Name: "myvm"}}}, nil
-		},
-		newController: func() (vm.Controller, error) { return nil, errBoom },
-	})
-	root.SetArgs([]string{"run", "--vm", "myvm"})
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want a wrapped controller connect error")
-	}
-	if !errors.Is(err, errBoom) {
-		t.Errorf("Execute() error = %v, want it to wrap errBoom", err)
 	}
 }
 
