@@ -23,13 +23,19 @@ var errBoom = errors.New("boom")
 // --config persistent flag and everything else run.go's runVM depends on
 // can't drift from root.go -- then swaps in a run subcommand wired to a
 // fake deps.
-func newTestRoot(deps runDeps) *cobra.Command {
+func newTestRoot(t *testing.T, deps runDeps) *cobra.Command {
+	t.Helper()
 	root := NewRootCmd()
+	removed := false
 	for _, sub := range root.Commands() {
 		if sub.Name() == "run" {
 			root.RemoveCommand(sub)
+			removed = true
 			break
 		}
+	}
+	if !removed {
+		t.Fatal("newTestRoot: NewRootCmd() has no \"run\" subcommand to replace")
 	}
 	root.AddCommand(newRunCmdWithDeps(deps))
 	return root
@@ -52,7 +58,7 @@ func writeVMBundle(t *testing.T) (vmxPath string) {
 }
 
 func TestRunCmd_MissingVMFlag_ReturnsError(t *testing.T) {
-	root := newTestRoot(runDeps{
+	root := newTestRoot(t, runDeps{
 		loadConfig:    func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		newController: func() (vm.Controller, error) { t.Fatal("newController should not be called"); return nil, nil },
 	})
@@ -101,7 +107,7 @@ func TestRunCmd_DependencyError_IsWrappedAndSuppressesUsage(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			root := newTestRoot(tt.deps(t))
+			root := newTestRoot(t, tt.deps(t))
 			root.SetArgs([]string{"run", "--vm", "myvm"})
 			var out bytes.Buffer
 			root.SetOut(&out)
@@ -122,7 +128,7 @@ func TestRunCmd_DependencyError_IsWrappedAndSuppressesUsage(t *testing.T) {
 }
 
 func TestRunCmd_UnknownVMName_ReturnsError(t *testing.T) {
-	root := newTestRoot(runDeps{
+	root := newTestRoot(t, runDeps{
 		loadConfig: func(path string) (*config.Config, error) {
 			return &config.Config{VMs: []config.VM{{Name: "other-vm"}}}, nil
 		},
@@ -149,7 +155,7 @@ func TestRunCmd_HappyPath_PrintsArchivePath(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
 
-	root := newTestRoot(runDeps{
+	root := newTestRoot(t, runDeps{
 		loadConfig: func(path string) (*config.Config, error) {
 			return &config.Config{
 				Destination: t.TempDir(),
@@ -181,7 +187,7 @@ func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 	fake.ToolsState = vm.ToolsRunning
 	fake.DeleteSnapshotErr = errBoom // fails at Stage: Merging, which is >= Snapshotting
 
-	root := newTestRoot(runDeps{
+	root := newTestRoot(t, runDeps{
 		loadConfig: func(path string) (*config.Config, error) {
 			return &config.Config{
 				Destination: t.TempDir(),
@@ -204,7 +210,7 @@ func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 }
 
 func TestRunCmd_ConfigLoadError_DoesNotDuplicatePath(t *testing.T) {
-	root := newTestRoot(runDeps{
+	root := newTestRoot(t, runDeps{
 		loadConfig: config.Load,
 		newController: func() (vm.Controller, error) {
 			t.Fatal("newController should not be called")
@@ -222,5 +228,30 @@ func TestRunCmd_ConfigLoadError_DoesNotDuplicatePath(t *testing.T) {
 	}
 	if got := strings.Count(err.Error(), missingPath); got != 1 {
 		t.Errorf("Execute() error = %q, want the config path to appear exactly once, got %d occurrences", err.Error(), got)
+	}
+}
+
+func TestRunCmd_ConfigLoadError_MalformedYAML_NamesPath(t *testing.T) {
+	root := newTestRoot(t, runDeps{
+		loadConfig: config.Load,
+		newController: func() (vm.Controller, error) {
+			t.Fatal("newController should not be called")
+			return nil, nil
+		},
+	})
+	badPath := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(badPath, []byte("destination: [unterminated"), 0o644); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+	root.SetArgs([]string{"run", "--vm", "myvm", "--config", badPath})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want a config parse error")
+	}
+	if !strings.Contains(err.Error(), badPath) {
+		t.Errorf("Execute() error = %q, want it to name the config path %q", err.Error(), badPath)
 	}
 }
