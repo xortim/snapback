@@ -104,8 +104,8 @@ func TestListCmd_ListArchivesError_IsWrapped(t *testing.T) {
 	root.SetErr(&bytes.Buffer{})
 
 	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), errBoom.Error()) {
-		t.Fatalf("Execute() error = %v, want it to wrap %q", err, errBoom)
+	if err == nil || !strings.Contains(err.Error(), errBoom.Error()) || !strings.Contains(err.Error(), "list archives") {
+		t.Fatalf("Execute() error = %v, want it to wrap %q with \"list archives\" context", err, errBoom)
 	}
 }
 
