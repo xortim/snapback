@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"math"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -63,7 +64,7 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 			a.Manifest.VMName,
 			a.Manifest.Timestamp.Local().Format(time.RFC3339),
 			formatSize(a.Manifest.SizeBytes),
-			a.Manifest.Comment,
+			sanitizeForTable(a.Manifest.Comment),
 		)
 		if err != nil {
 			return err
@@ -94,4 +95,12 @@ func formatSize(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", value, units[exp])
+}
+
+// sanitizeForTable strips characters that would confuse tabwriter's
+// column (tab) and row (newline) delimiters out of free-form text -- e.g.
+// Manifest.Comment, which comes from a user-configured comment_template
+// and isn't otherwise constrained.
+func sanitizeForTable(s string) string {
+	return strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(s)
 }

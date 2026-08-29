@@ -122,6 +122,32 @@ func TestListCmd_ListArchivesError_IsWrapped(t *testing.T) {
 	}
 }
 
+func TestListCmd_SanitizesCommentForTable(t *testing.T) {
+	root := newTestRootForList(t, listDeps{
+		loadConfig: func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		listArchives: func(string) ([]backup.Archive, error) {
+			return []backup.Archive{
+				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", Comment: "line1\tline2\nline3"}},
+			}, nil
+		},
+	})
+	root.SetArgs([]string{"list"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdout had %d lines, want 2 (header + one archive row) -- an unsanitized embedded newline in Comment would split it into a third line: %q", len(lines), out.String())
+	}
+	if !strings.Contains(lines[1], "line1 line2 line3") {
+		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[1])
+	}
+}
+
 func TestFormatSize(t *testing.T) {
 	tests := []struct {
 		name  string
