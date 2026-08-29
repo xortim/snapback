@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"text/tabwriter"
 	"time"
 
@@ -74,14 +75,23 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 // formatSize renders n bytes as a human-readable IEC size (KiB/MiB/...),
 // matching the units Finder/du -h use on macOS rather than SI (KB/MB).
 func formatSize(n int64) string {
-	const unit = 1024
-	if n < unit {
+	if n < 1024 {
 		return fmt.Sprintf("%d B", n)
 	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
+	const unit = 1024.0
+	const units = "KMGTPE"
+	value := float64(n)
+	exp := -1
+	for value >= unit && exp < len(units)-1 {
+		value /= unit
 		exp++
 	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+	// %.1f rounds to one decimal place, which can round a value just under
+	// unit (e.g. 1023.95) up to "1024.0" -- display that as 1.0 of the next
+	// unit instead of 1024.0 of this one.
+	if rounded := math.Round(value*10) / 10; rounded >= unit && exp < len(units)-1 {
+		value /= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", value, units[exp])
 }

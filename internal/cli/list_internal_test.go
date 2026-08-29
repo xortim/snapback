@@ -121,3 +121,26 @@ func TestListCmd_ListArchivesError_IsWrapped(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want it to wrap %q", err, errBoom)
 	}
 }
+
+func TestFormatSize(t *testing.T) {
+	tests := []struct {
+		name  string
+		bytes int64
+		want  string
+	}{
+		{"zero", 0, "0 B"},
+		{"under a KiB", 512, "512 B"},
+		{"exactly a KiB", 1024, "1.0 KiB"},
+		{"a couple KiB", 2048, "2.0 KiB"},
+		{"just under a GiB boundary", 1073741823, "1.0 GiB"},
+		{"just under a MiB boundary", 1048575, "1.0 MiB"},
+		{"exactly a GiB", 1 << 30, "1.0 GiB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatSize(tt.bytes); got != tt.want {
+				t.Errorf("formatSize(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
+	}
+}
