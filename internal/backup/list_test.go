@@ -94,6 +94,12 @@ func TestListArchives_MissingDestinationReturnsEmptyNotError(t *testing.T) {
 	}
 }
 
+func TestListArchives_EmptyDestinationReturnsError(t *testing.T) {
+	if _, err := ListArchives(""); err == nil {
+		t.Fatal("ListArchives(\"\") error = nil, want an error for an unconfigured destination")
+	}
+}
+
 func TestListArchives_MalformedManifestReturnsError(t *testing.T) {
 	destination := t.TempDir()
 	dir := filepath.Join(destination, "myvm-20260101T000000Z")

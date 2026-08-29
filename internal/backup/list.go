@@ -19,12 +19,20 @@ type Archive struct {
 
 // ListArchives scans destination for archive directories and returns
 // their manifests, newest first. destination not existing yet (no backup
-// has ever run) is reported as zero archives, not an error. A directory
-// with no manifest.json is skipped rather than treated as an error too --
-// that's the signature of a run that died before Checksumming wrote it
-// (see choreography.go's succeeded/defer cleanup comment), not a corrupt
-// archive.
+// has ever run there) is reported as zero archives, not an error -- but
+// an empty destination string (an unconfigured/misconfigured config, not
+// a legitimate first-run path) is rejected outright: os.ReadDir("") also
+// fails with ErrNotExist, and letting that fall through would silently
+// report "no archives" for a config that never set destination at all. A
+// directory with no manifest.json is skipped rather than treated as an
+// error too -- that's the signature of a run that died before
+// Checksumming wrote it (see choreography.go's succeeded/defer cleanup
+// comment), not a corrupt archive.
 func ListArchives(destination string) ([]Archive, error) {
+	if destination == "" {
+		return nil, fmt.Errorf("destination is required")
+	}
+
 	entries, err := os.ReadDir(destination)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
