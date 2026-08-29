@@ -67,7 +67,11 @@ func ListArchives(destination string) ([]Archive, error) {
 	}
 
 	sort.Slice(archives, func(i, j int) bool {
-		return archives[i].Manifest.Timestamp.After(archives[j].Manifest.Timestamp)
+		ti, tj := archives[i].Manifest.Timestamp, archives[j].Manifest.Timestamp
+		if !ti.Equal(tj) {
+			return ti.After(tj)
+		}
+		return archives[i].ArchiveID < archives[j].ArchiveID
 	})
 	return archives, nil
 }
