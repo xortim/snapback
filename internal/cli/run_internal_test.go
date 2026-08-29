@@ -19,13 +19,18 @@ import (
 
 var errBoom = errors.New("boom")
 
-// newTestRoot builds a minimal parent command carrying the persistent
-// --config flag NewRootCmd() normally registers, with the run subcommand
-// (built from deps) attached -- mirrors how run.go's runVM reads --config
-// via cmd.Flags().GetString, without needing every other real subcommand.
+// newTestRoot builds the real root command via NewRootCmd() -- so the
+// --config persistent flag and everything else run.go's runVM depends on
+// can't drift from root.go -- then swaps in a run subcommand wired to a
+// fake deps.
 func newTestRoot(deps runDeps) *cobra.Command {
-	root := &cobra.Command{Use: "snapback"}
-	root.PersistentFlags().String("config", "unused.yaml", "path to config file")
+	root := NewRootCmd()
+	for _, sub := range root.Commands() {
+		if sub.Name() == "run" {
+			root.RemoveCommand(sub)
+			break
+		}
+	}
 	root.AddCommand(newRunCmdWithDeps(deps))
 	return root
 }
