@@ -66,6 +66,15 @@ func ListArchives(destination string) ([]Archive, error) {
 		archives = append(archives, Archive{ArchiveID: entry.Name(), Manifest: m})
 	}
 
+	sortArchives(archives)
+	return archives, nil
+}
+
+// sortArchives sorts archives newest-first by Manifest.Timestamp, breaking
+// ties on equal timestamps (one-second resolution, so same-second archives
+// are common) by ArchiveID ascending, so output order is deterministic
+// regardless of input order.
+func sortArchives(archives []Archive) {
 	sort.Slice(archives, func(i, j int) bool {
 		ti, tj := archives[i].Manifest.Timestamp, archives[j].Manifest.Timestamp
 		if !ti.Equal(tj) {
@@ -73,5 +82,4 @@ func ListArchives(destination string) ([]Archive, error) {
 		}
 		return archives[i].ArchiveID < archives[j].ArchiveID
 	})
-	return archives, nil
 }

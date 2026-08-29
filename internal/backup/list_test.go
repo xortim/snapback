@@ -44,19 +44,15 @@ func TestListArchives_ReturnsManifestsNewestFirst(t *testing.T) {
 	}
 }
 
-func TestListArchives_TiesBreakOnArchiveID(t *testing.T) {
-	destination := t.TempDir()
+func TestSortArchives_TiesBreakOnArchiveID(t *testing.T) {
 	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	writeTestManifest(t, destination, "zeta-20260101T000000Z", Manifest{VMName: "zeta", Timestamp: ts})
-	writeTestManifest(t, destination, "alpha-20260101T000000Z", Manifest{VMName: "alpha", Timestamp: ts})
+	archives := []Archive{
+		{ArchiveID: "zeta-20260101T000000Z", Manifest: Manifest{VMName: "zeta", Timestamp: ts}},
+		{ArchiveID: "alpha-20260101T000000Z", Manifest: Manifest{VMName: "alpha", Timestamp: ts}},
+	}
 
-	archives, err := ListArchives(destination)
-	if err != nil {
-		t.Fatalf("ListArchives() error = %v, want nil", err)
-	}
-	if len(archives) != 2 {
-		t.Fatalf("len(archives) = %d, want 2", len(archives))
-	}
+	sortArchives(archives)
+
 	if archives[0].ArchiveID != "alpha-20260101T000000Z" || archives[1].ArchiveID != "zeta-20260101T000000Z" {
 		t.Errorf("archives = [%s, %s], want alpha before zeta for equal timestamps", archives[0].ArchiveID, archives[1].ArchiveID)
 	}
