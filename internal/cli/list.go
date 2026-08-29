@@ -32,6 +32,7 @@ func newListCmdWithDeps(deps listDeps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List backup archives",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
 			return runList(cmd, deps)
