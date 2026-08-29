@@ -57,11 +57,36 @@ func TestRunCmd_MissingVMFlag_ReturnsError(t *testing.T) {
 		newController: func() (vm.Controller, error) { t.Fatal("newController should not be called"); return nil, nil },
 	})
 	root.SetArgs([]string{"run"})
-	root.SetOut(&bytes.Buffer{})
+	var out bytes.Buffer
+	root.SetOut(&out)
 	root.SetErr(&bytes.Buffer{})
 
 	if err := root.Execute(); err == nil {
 		t.Fatal("Execute() error = nil, want an error for a missing required --vm flag")
+	}
+	if !strings.Contains(out.String(), "Usage:") {
+		t.Errorf("stdout = %q, want usage text for a flag-misuse error", out.String())
+	}
+}
+
+func TestRunCmd_ConfigLoadError_SuppressesUsage(t *testing.T) {
+	root := newTestRoot(runDeps{
+		loadConfig: func(path string) (*config.Config, error) { return nil, errBoom },
+		newController: func() (vm.Controller, error) {
+			t.Fatal("newController should not be called")
+			return nil, nil
+		},
+	})
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want a wrapped config load error")
+	}
+	if strings.Contains(out.String(), "Usage:") {
+		t.Errorf("stdout = %q, want no usage text for an operational error", out.String())
 	}
 }
 

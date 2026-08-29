@@ -37,6 +37,10 @@ func newRunCmdWithDeps(deps runDeps) *cobra.Command {
 		Short: "Run a backup",
 		Long:  "Run a zero-downtime backup of one VM named on the command line. Backing up every configured VM (`run --all`) is not yet implemented.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// Flag validation (e.g. the required --vm flag) runs before RunE,
+			// so this only suppresses usage for errors runVM itself returns --
+			// flag-misuse errors still print usage.
+			cmd.SilenceUsage = true
 			return runVM(cmd, deps, vmName)
 		},
 	}
