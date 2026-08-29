@@ -53,14 +53,9 @@ func newRunCmdWithDeps(deps runDeps) *cobra.Command {
 }
 
 func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
-	configPath, err := cmd.Flags().GetString("config")
+	cfg, configPath, err := loadConfigForCmd(cmd, deps.loadConfig)
 	if err != nil {
 		return err
-	}
-
-	cfg, err := deps.loadConfig(configPath)
-	if err != nil {
-		return fmt.Errorf("load config: %w", err)
 	}
 
 	vmCfg, ok := findVMConfig(cfg.VMs, vmName)

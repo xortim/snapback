@@ -17,28 +17,11 @@ import (
 	"github.com/xortim/snapback/internal/vm"
 )
 
-var errBoom = errors.New("boom")
-
-// newTestRoot builds the real root command via NewRootCmd() -- so the
-// --config persistent flag and everything else run.go's runVM depends on
-// can't drift from root.go -- then swaps in a run subcommand wired to a
-// fake deps.
+// newTestRoot builds the real root command with a run subcommand wired to
+// a fake deps -- see swapSubcommand for why it's built on NewRootCmd().
 func newTestRoot(t *testing.T, deps runDeps) *cobra.Command {
 	t.Helper()
-	root := NewRootCmd()
-	removed := false
-	for _, sub := range root.Commands() {
-		if sub.Name() == "run" {
-			root.RemoveCommand(sub)
-			removed = true
-			break
-		}
-	}
-	if !removed {
-		t.Fatal("newTestRoot: NewRootCmd() has no \"run\" subcommand to replace")
-	}
-	root.AddCommand(newRunCmdWithDeps(deps))
-	return root
+	return swapSubcommand(t, "run", newRunCmdWithDeps(deps))
 }
 
 func writeVMBundle(t *testing.T) (vmxPath string) {

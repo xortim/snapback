@@ -55,16 +55,6 @@ func newInitCmd() *cobra.Command {
 	}
 }
 
-func newListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List backup archives",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented(cmd)
-		},
-	}
-}
-
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
