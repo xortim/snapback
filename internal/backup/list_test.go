@@ -186,6 +186,18 @@ func TestListArchives_PreservesManifestFields(t *testing.T) {
 	}
 }
 
+func TestListArchives_ReadDirNonNotExistErrorIsReported(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(destination, []byte("i am a file, not a directory"), 0o600); err != nil {
+		t.Fatalf("write file: %v", err)
+	}
+
+	_, err := ListArchives(destination)
+	if err == nil {
+		t.Fatal("ListArchives() error = nil, want an error when destination is a regular file (os.ReadDir fails with ENOTDIR)")
+	}
+}
+
 func TestListArchives_FollowsSymlinkedArchiveDirectory(t *testing.T) {
 	destination := t.TempDir()
 	realParent := t.TempDir()
