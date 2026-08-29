@@ -135,6 +135,38 @@ func TestListCmd_SanitizesCommentForTable(t *testing.T) {
 	}
 }
 
+func TestListCmd_SanitizesArchiveIDAndVMNameForTable(t *testing.T) {
+	root := newTestRootForList(t, listDeps{
+		loadConfig: func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		listArchives: func(string) ([]backup.Archive, error) {
+			return []backup.Archive{
+				{
+					ArchiveID: "myvm-1\t20260304T050607Z",
+					Manifest:  backup.Manifest{VMName: "my\nvm"},
+				},
+			}, nil
+		},
+	})
+	root.SetArgs([]string{"list"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("stdout had %d lines, want 2 (header + one archive row) -- an unsanitized embedded tab/newline in ArchiveID/VMName would split or misalign it: %q", len(lines), out.String())
+	}
+	if !strings.Contains(lines[1], "myvm-1 20260304T050607Z") {
+		t.Errorf("row = %q, want ArchiveID's embedded tab replaced with a space (\"myvm-1 20260304T050607Z\")", lines[1])
+	}
+	if !strings.Contains(lines[1], "my vm") {
+		t.Errorf("row = %q, want VMName's embedded newline replaced with a space (\"my vm\")", lines[1])
+	}
+}
+
 func TestFormatSize(t *testing.T) {
 	tests := []struct {
 		name  string

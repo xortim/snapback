@@ -62,8 +62,8 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 	}
 	for _, a := range archives {
 		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			a.ArchiveID,
-			a.Manifest.VMName,
+			sanitizeForTable(a.ArchiveID),
+			sanitizeForTable(a.Manifest.VMName),
 			a.Manifest.Timestamp.Local().Format(time.RFC3339),
 			formatSize(a.Manifest.SizeBytes),
 			sanitizeForTable(a.Manifest.Comment),
