@@ -100,18 +100,46 @@ func TestListArchives_EmptyDestinationReturnsError(t *testing.T) {
 	}
 }
 
-func TestListArchives_MalformedManifestReturnsError(t *testing.T) {
+func TestListArchives_SkipsMalformedManifest_ReturnsOtherArchives(t *testing.T) {
 	destination := t.TempDir()
-	dir := filepath.Join(destination, "myvm-20260101T000000Z")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	writeTestManifest(t, destination, "myvm-20260101T000000Z", Manifest{VMName: "myvm"})
+	badDir := filepath.Join(destination, "myvm-20260202T000000Z")
+	if err := os.MkdirAll(badDir, 0o700); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte("not json"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(badDir, "manifest.json"), []byte("not json"), 0o600); err != nil {
 		t.Fatalf("write manifest: %v", err)
 	}
 
-	if _, err := ListArchives(destination); err == nil {
-		t.Fatal("ListArchives() error = nil, want error for malformed manifest.json")
+	archives, err := ListArchives(destination)
+	if err != nil {
+		t.Fatalf("ListArchives() error = %v, want nil (malformed manifest skipped, not fatal)", err)
+	}
+	if len(archives) != 1 {
+		t.Fatalf("len(archives) = %d, want 1 (only the well-formed archive)", len(archives))
+	}
+	if archives[0].ArchiveID != "myvm-20260101T000000Z" {
+		t.Errorf("archives[0].ArchiveID = %q, want %q", archives[0].ArchiveID, "myvm-20260101T000000Z")
+	}
+}
+
+func TestListArchives_SkipsUnreadableManifest_ReturnsOtherArchives(t *testing.T) {
+	destination := t.TempDir()
+	writeTestManifest(t, destination, "myvm-20260101T000000Z", Manifest{VMName: "myvm"})
+	// A manifest.json that's actually a directory can never be read as a
+	// file -- this simulates a non-ErrNotExist os.ReadFile failure without
+	// relying on platform-specific permission bits.
+	badManifestPath := filepath.Join(destination, "myvm-20260202T000000Z", "manifest.json")
+	if err := os.MkdirAll(badManifestPath, 0o700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	archives, err := ListArchives(destination)
+	if err != nil {
+		t.Fatalf("ListArchives() error = %v, want nil (unreadable manifest skipped, not fatal)", err)
+	}
+	if len(archives) != 1 {
+		t.Fatalf("len(archives) = %d, want 1 (only the well-formed archive)", len(archives))
 	}
 }
 

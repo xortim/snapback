@@ -24,10 +24,13 @@ type Archive struct {
 // a legitimate first-run path) is rejected outright: os.ReadDir("") also
 // fails with ErrNotExist, and letting that fall through would silently
 // report "no archives" for a config that never set destination at all. A
-// directory with no manifest.json is skipped rather than treated as an
-// error too -- that's the signature of a run that died before
-// Checksumming wrote it (see choreography.go's succeeded/defer cleanup
-// comment), not a corrupt archive.
+// directory whose manifest.json is missing, unreadable, or malformed is
+// skipped rather than aborting the whole scan -- writeManifest
+// (manifest.go) isn't atomic, so a manifest can legitimately be mid-write
+// if ListArchives races a concurrent, still-running `snapback run`;
+// treating that as "this one archive isn't ready yet" keeps every other,
+// already-complete archive visible instead of hiding all of them behind
+// one in-progress or corrupt entry.
 func ListArchives(destination string) ([]Archive, error) {
 	if destination == "" {
 		return nil, fmt.Errorf("destination is required")
@@ -49,14 +52,16 @@ func ListArchives(destination string) ([]Archive, error) {
 		manifestPath := filepath.Join(destination, entry.Name(), "manifest.json")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
-			if errors.Is(err, os.ErrNotExist) {
-				continue
-			}
-			return nil, fmt.Errorf("read manifest %s: %w", manifestPath, err)
+			// Missing (a run that died before Checksumming), truncated (raced
+			// a concurrent in-flight run's non-atomic writeManifest), or
+			// otherwise unreadable -- every case is "this one archive isn't
+			// ready to be listed yet", not a reason to hide every other
+			// archive by aborting the whole scan.
+			continue
 		}
 		var m Manifest
 		if err := json.Unmarshal(data, &m); err != nil {
-			return nil, fmt.Errorf("parse manifest %s: %w", manifestPath, err)
+			continue
 		}
 		archives = append(archives, Archive{ArchiveID: entry.Name(), Manifest: m})
 	}
