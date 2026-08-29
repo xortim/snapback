@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 
@@ -27,10 +28,18 @@ func NewRootCmd() *cobra.Command {
 }
 
 // defaultConfigPath returns ~/.config/snapback/config.yaml, falling back to
-// a relative path if the home directory can't be determined.
+// a relative path (with a warning on stderr) if the home directory can't be
+// determined.
 func defaultConfigPath() string {
+	return defaultConfigPathFor(os.Stderr)
+}
+
+// defaultConfigPathFor implements defaultConfigPath, taking the warning
+// output as a parameter so tests can capture it without touching os.Stderr.
+func defaultConfigPathFor(warnOut io.Writer) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
+		fmt.Fprintf(warnOut, "warning: could not determine home directory (%v); using relative config.yaml as the default --config path\n", err)
 		return "config.yaml"
 	}
 	return filepath.Join(home, ".config", "snapback", "config.yaml")
