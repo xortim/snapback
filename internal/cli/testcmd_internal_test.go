@@ -3,10 +3,16 @@
 package cli
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+// errBoom is a shared sentinel error for tests across this package that
+// need to inject a fake dependency failure (config load, archive listing,
+// controller connect, etc.) and assert it's wrapped/propagated correctly.
+var errBoom = errors.New("boom")
 
 // swapSubcommand builds the real root command via NewRootCmd() -- so the
 // --config persistent flag and everything else the real command wiring

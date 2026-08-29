@@ -17,8 +17,6 @@ import (
 	"github.com/xortim/snapback/internal/vm"
 )
 
-var errBoom = errors.New("boom")
-
 // newTestRoot builds the real root command with a run subcommand wired to
 // a fake deps -- see swapSubcommand for why it's built on NewRootCmd().
 func newTestRoot(t *testing.T, deps runDeps) *cobra.Command {
