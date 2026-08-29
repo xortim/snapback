@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+
+	"github.com/xortim/snapback/internal/backup"
+	"github.com/xortim/snapback/internal/config"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -20,7 +23,10 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(
 		newInitCmd(),
 		newRunCmd(),
-		newListCmd(),
+		newListCmdWithDeps(listDeps{
+			loadConfig:   config.Load,
+			listArchives: backup.ListArchives,
+		}),
 		newStatusCmd(),
 	)
 
@@ -49,16 +55,6 @@ func newInitCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "init",
 		Short: "Interactive config bootstrap",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented(cmd)
-		},
-	}
-}
-
-func newListCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "list",
-		Short: "List backup archives",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return errNotImplemented(cmd)
 		},
