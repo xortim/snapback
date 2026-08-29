@@ -16,25 +16,12 @@ import (
 	"github.com/xortim/snapback/internal/config"
 )
 
-// newTestRootForList builds the real root command via NewRootCmd() -- so
-// the --config persistent flag can't drift from root.go -- then swaps in
-// a list subcommand wired to fake deps.
+// newTestRootForList builds the real root command with a list subcommand
+// wired to a fake deps -- see swapSubcommand for why it's built on
+// NewRootCmd().
 func newTestRootForList(t *testing.T, deps listDeps) *cobra.Command {
 	t.Helper()
-	root := NewRootCmd()
-	removed := false
-	for _, sub := range root.Commands() {
-		if sub.Name() == "list" {
-			root.RemoveCommand(sub)
-			removed = true
-			break
-		}
-	}
-	if !removed {
-		t.Fatal("newTestRootForList: NewRootCmd() has no \"list\" subcommand to replace")
-	}
-	root.AddCommand(newListCmdWithDeps(deps))
-	return root
+	return swapSubcommand(t, "list", newListCmdWithDeps(deps))
 }
 
 func TestListCmd_NoArchives_PrintsMessage(t *testing.T) {
