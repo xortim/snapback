@@ -185,3 +185,21 @@ func TestListArchives_PreservesManifestFields(t *testing.T) {
 		t.Errorf("archives[0].Manifest = %+v, want %+v", got, want)
 	}
 }
+
+func TestListArchives_FollowsSymlinkedArchiveDirectory(t *testing.T) {
+	destination := t.TempDir()
+	realParent := t.TempDir()
+	writeTestManifest(t, realParent, "myvm-20260101T000000Z", Manifest{VMName: "myvm"})
+	linkPath := filepath.Join(destination, "myvm-20260101T000000Z")
+	if err := os.Symlink(filepath.Join(realParent, "myvm-20260101T000000Z"), linkPath); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	archives, err := ListArchives(destination)
+	if err != nil {
+		t.Fatalf("ListArchives() error = %v, want nil", err)
+	}
+	if len(archives) != 1 {
+		t.Fatalf("len(archives) = %d, want 1 (symlinked archive directory followed)", len(archives))
+	}
+}

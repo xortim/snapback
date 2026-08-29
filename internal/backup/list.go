@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -46,7 +47,7 @@ func ListArchives(destination string) ([]Archive, error) {
 
 	var archives []Archive
 	for _, entry := range entries {
-		if !entry.IsDir() {
+		if !isArchiveDir(destination, entry) {
 			continue
 		}
 		manifestPath := filepath.Join(destination, entry.Name(), "manifest.json")
@@ -82,4 +83,19 @@ func sortArchives(archives []Archive) {
 		}
 		return archives[i].ArchiveID < archives[j].ArchiveID
 	})
+}
+
+// isArchiveDir reports whether entry (a child of destination) is a
+// directory, following a symlink if entry itself is one -- a symlinked
+// archive directory (e.g. one relocated onto slower storage) should list
+// like any other.
+func isArchiveDir(destination string, entry os.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&fs.ModeSymlink == 0 {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(destination, entry.Name()))
+	return err == nil && info.IsDir()
 }
