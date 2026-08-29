@@ -127,6 +127,53 @@ func TestRunCmd_DependencyError_IsWrappedAndSuppressesUsage(t *testing.T) {
 	}
 }
 
+func TestRunCmd_ConfigLoadError_DoesNotDuplicatePath(t *testing.T) {
+	root := newTestRoot(t, runDeps{
+		loadConfig: config.Load,
+		newController: func() (vm.Controller, error) {
+			t.Fatal("newController should not be called")
+			return nil, nil
+		},
+	})
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	root.SetArgs([]string{"run", "--vm", "myvm", "--config", missingPath})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want a config load error")
+	}
+	if got := strings.Count(err.Error(), missingPath); got != 1 {
+		t.Errorf("Execute() error = %q, want the config path to appear exactly once, got %d occurrences", err.Error(), got)
+	}
+}
+
+func TestRunCmd_ConfigLoadError_MalformedYAML_NamesPath(t *testing.T) {
+	root := newTestRoot(t, runDeps{
+		loadConfig: config.Load,
+		newController: func() (vm.Controller, error) {
+			t.Fatal("newController should not be called")
+			return nil, nil
+		},
+	})
+	badPath := filepath.Join(t.TempDir(), "bad.yaml")
+	if err := os.WriteFile(badPath, []byte("destination: [unterminated"), 0o644); err != nil {
+		t.Fatalf("write bad config: %v", err)
+	}
+	root.SetArgs([]string{"run", "--vm", "myvm", "--config", badPath})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want a config parse error")
+	}
+	if !strings.Contains(err.Error(), badPath) {
+		t.Errorf("Execute() error = %q, want it to name the config path %q", err.Error(), badPath)
+	}
+}
+
 func TestRunCmd_UnknownVMName_ReturnsError(t *testing.T) {
 	root := newTestRoot(t, runDeps{
 		loadConfig: func(path string) (*config.Config, error) {
@@ -206,52 +253,5 @@ func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "may remain") {
 		t.Errorf("stderr = %q, want an orphaned-snapshot warning", errOut.String())
-	}
-}
-
-func TestRunCmd_ConfigLoadError_DoesNotDuplicatePath(t *testing.T) {
-	root := newTestRoot(t, runDeps{
-		loadConfig: config.Load,
-		newController: func() (vm.Controller, error) {
-			t.Fatal("newController should not be called")
-			return nil, nil
-		},
-	})
-	missingPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
-	root.SetArgs([]string{"run", "--vm", "myvm", "--config", missingPath})
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want a config load error")
-	}
-	if got := strings.Count(err.Error(), missingPath); got != 1 {
-		t.Errorf("Execute() error = %q, want the config path to appear exactly once, got %d occurrences", err.Error(), got)
-	}
-}
-
-func TestRunCmd_ConfigLoadError_MalformedYAML_NamesPath(t *testing.T) {
-	root := newTestRoot(t, runDeps{
-		loadConfig: config.Load,
-		newController: func() (vm.Controller, error) {
-			t.Fatal("newController should not be called")
-			return nil, nil
-		},
-	})
-	badPath := filepath.Join(t.TempDir(), "bad.yaml")
-	if err := os.WriteFile(badPath, []byte("destination: [unterminated"), 0o644); err != nil {
-		t.Fatalf("write bad config: %v", err)
-	}
-	root.SetArgs([]string{"run", "--vm", "myvm", "--config", badPath})
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil {
-		t.Fatal("Execute() error = nil, want a config parse error")
-	}
-	if !strings.Contains(err.Error(), badPath) {
-		t.Errorf("Execute() error = %q, want it to name the config path %q", err.Error(), badPath)
 	}
 }
