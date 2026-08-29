@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xortim/snapback/internal/config"
@@ -61,6 +62,18 @@ func TestLoad_MissingFile(t *testing.T) {
 	_, err := config.Load(filepath.Join(t.TempDir(), "does-not-exist.yaml"))
 	if err == nil {
 		t.Fatal("Load returned nil error for a missing file, want an error")
+	}
+}
+
+func TestLoad_MalformedYAML_ErrorNamesPath(t *testing.T) {
+	path := writeTempConfig(t, "destination: [unterminated")
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("Load returned nil error for malformed YAML, want an error")
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("Load error = %q, want it to name the config path %q", err.Error(), path)
 	}
 }
 
