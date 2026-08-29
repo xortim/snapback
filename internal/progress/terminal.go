@@ -21,12 +21,15 @@ func NewTerminalReporter(w io.Writer) TerminalReporter {
 
 // Report implements Reporter.
 func (r TerminalReporter) Report(e Event) {
+	// Report has no error return (Reporter is a fire-and-forget progress
+	// sink), so a write failure here has nowhere to go -- discard it
+	// explicitly rather than leave it unchecked.
 	switch {
 	case e.Message != "" && e.Err != nil:
-		fmt.Fprintf(r.W, "%s: %s: %v\n", e.Stage, e.Message, e.Err)
+		_, _ = fmt.Fprintf(r.W, "%s: %s: %v\n", e.Stage, e.Message, e.Err)
 	case e.Message != "":
-		fmt.Fprintf(r.W, "%s: %s\n", e.Stage, e.Message)
+		_, _ = fmt.Fprintf(r.W, "%s: %s\n", e.Stage, e.Message)
 	case e.Err != nil:
-		fmt.Fprintf(r.W, "%s: %v\n", e.Stage, e.Err)
+		_, _ = fmt.Fprintf(r.W, "%s: %v\n", e.Stage, e.Err)
 	}
 }
