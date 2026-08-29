@@ -39,7 +39,7 @@ func defaultConfigPath() string {
 func defaultConfigPathFor(warnOut io.Writer) string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		fmt.Fprintf(warnOut, "warning: could not determine home directory (%v); using relative config.yaml as the default --config path\n", err)
+		_, _ = fmt.Fprintf(warnOut, "warning: could not determine home directory (%v); using relative config.yaml as the default --config path\n", err)
 		return "config.yaml"
 	}
 	return filepath.Join(home, ".config", "snapback", "config.yaml")
