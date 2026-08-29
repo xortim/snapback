@@ -182,3 +182,25 @@ func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 		t.Errorf("stderr = %q, want an orphaned-snapshot warning", errOut.String())
 	}
 }
+
+func TestRunCmd_ConfigLoadError_DoesNotDuplicatePath(t *testing.T) {
+	root := newTestRoot(runDeps{
+		loadConfig: config.Load,
+		newController: func() (vm.Controller, error) {
+			t.Fatal("newController should not be called")
+			return nil, nil
+		},
+	})
+	missingPath := filepath.Join(t.TempDir(), "does-not-exist.yaml")
+	root.SetArgs([]string{"run", "--vm", "myvm", "--config", missingPath})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("Execute() error = nil, want a config load error")
+	}
+	if got := strings.Count(err.Error(), missingPath); got != 1 {
+		t.Errorf("Execute() error = %q, want the config path to appear exactly once, got %d occurrences", err.Error(), got)
+	}
+}

@@ -56,7 +56,7 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 
 	cfg, err := deps.loadConfig(configPath)
 	if err != nil {
-		return fmt.Errorf("load config %s: %w", configPath, err)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	vmCfg, ok := findVMConfig(cfg.VMs, vmName)
