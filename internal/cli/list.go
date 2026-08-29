@@ -21,6 +21,13 @@ type listDeps struct {
 	listArchives func(destination string) ([]backup.Archive, error)
 }
 
+func newListCmd() *cobra.Command {
+	return newListCmdWithDeps(listDeps{
+		loadConfig:   config.Load,
+		listArchives: backup.ListArchives,
+	})
+}
+
 func newListCmdWithDeps(deps listDeps) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",

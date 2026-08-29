@@ -7,9 +7,6 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
-
-	"github.com/xortim/snapback/internal/backup"
-	"github.com/xortim/snapback/internal/config"
 )
 
 func NewRootCmd() *cobra.Command {
@@ -23,10 +20,7 @@ func NewRootCmd() *cobra.Command {
 	root.AddCommand(
 		newInitCmd(),
 		newRunCmd(),
-		newListCmdWithDeps(listDeps{
-			loadConfig:   config.Load,
-			listArchives: backup.ListArchives,
-		}),
+		newListCmd(),
 		newStatusCmd(),
 	)
 
