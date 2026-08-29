@@ -72,9 +72,13 @@ func ListArchives(destination string) ([]Archive, error) {
 }
 
 // sortArchives sorts archives newest-first by Manifest.Timestamp, breaking
-// ties on equal timestamps (one-second resolution, so same-second archives
-// are common) by ArchiveID ascending, so output order is deterministic
-// regardless of input order.
+// ties on equal timestamps by ArchiveID ascending. Manifest.Timestamp is
+// full nanosecond precision, so two archives from real backup.Run
+// executions essentially never collide; the tiebreak exists for
+// determinism in general -- hand-copied, restored, or manually edited
+// manifests, or any future caller that builds a Manifest without going
+// through backup.Run -- so output order never depends on sort.Slice's
+// unspecified behavior for equal keys.
 func sortArchives(archives []Archive) {
 	sort.Slice(archives, func(i, j int) bool {
 		ti, tj := archives[i].Manifest.Timestamp, archives[j].Manifest.Timestamp
