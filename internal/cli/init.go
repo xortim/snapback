@@ -39,12 +39,38 @@ func newInitCmd() *cobra.Command {
 // writeConfigFile creates the config file's parent directory if it
 // doesn't already exist, then writes data to path with 0644 permissions
 // -- world-readable, since config.yaml holds no secrets, just VM paths
-// and retention settings.
+// and retention settings. Left unwrapped: runInit already wraps whatever
+// this returns as "write config: %w", and a second wrap here would just
+// double that context.
+//
+// Writes to a temp file in the same directory first, then renames it
+// into place, rather than truncating path directly -- with --force
+// overwriting an existing config, a write that's interrupted partway
+// (disk full, process killed) must not leave the user's previous,
+// working config truncated.
 func writeConfigFile(path string, data []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create config directory: %w", err)
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
 	}
-	return os.WriteFile(path, data, 0o644)
+	tmp, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath) // no-op once Rename below succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // configFileExists reports whether path exists, treating any Stat error
@@ -71,7 +97,7 @@ func newInitCmdWithDeps(deps initDeps) *cobra.Command {
 }
 
 func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
-	configPath, err := cmd.Flags().GetString("config")
+	configPath, err := configPathForCmd(cmd)
 	if err != nil {
 		return err
 	}
@@ -90,6 +116,11 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 	vms, err := promptVMs(out, in, candidates)
 	if err != nil {
 		return err
+	}
+	if len(vms) == 0 {
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: no VMs configured; `snapback run --all` will have nothing to back up"); err != nil {
+			return err
+		}
 	}
 
 	destination, err := promptString(out, in, "Backup destination", "/Volumes/Backups/snapback")

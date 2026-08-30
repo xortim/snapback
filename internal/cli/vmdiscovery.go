@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -28,7 +29,7 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			if os.IsNotExist(err) {
+			if errors.Is(err, os.ErrNotExist) {
 				continue
 			}
 			return nil, fmt.Errorf("scan %s: %w", dir, err)

@@ -107,6 +107,24 @@ vms:
 	}
 }
 
+func TestLoad_DefaultsMissingCompressionToZstd(t *testing.T) {
+	path := writeTempConfig(t, `
+destination: /Volumes/Backups/snapback
+retention:
+  keep_last: 1
+  keep_daily: 1
+  keep_weekly: 1
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v, want a missing compression field to default rather than fail validation", err)
+	}
+	if cfg.Compression != "zstd" {
+		t.Errorf("Compression = %q, want the default %q", cfg.Compression, "zstd")
+	}
+}
+
 func writeTempConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

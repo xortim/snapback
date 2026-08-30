@@ -8,23 +8,25 @@ Phase 1 (core CLI) is in progress. Real Go source exists under
 `cmd/snapback`, `internal/backup`, `internal/cli`, `internal/config`,
 `internal/progress`, and `internal/vm`.
 
-Landed so far (closed issues #2–#5, #11, #14, #19, #21; merged PRs #12,
-#13, #18, #20, #22, #23, #24): the vmcli-vs-vmrun investigation, cobra
-CLI scaffolding + koanf config loading, the `vm.Controller` interface
-with `vm.FakeVMController`, the full backup choreography (snapshot →
-sync → copy → merge → archive → checksum) in `internal/backup`, `Run()`
-wired to `context.Context` and `progress.Reporter`, CI, and a real
-(non-fake) `vm.VMCLIController` implementation backed by `vmcli` plus its
-integration suite.
+Landed so far (closed issues #2–#8, #11, #14–#16, #19, #21; merged PRs
+#12, #13, #18, #20, #22–#24, #33): the vmcli-vs-vmrun investigation,
+cobra CLI scaffolding + koanf config loading, the `vm.Controller`
+interface with `vm.FakeVMController`, the full backup choreography
+(snapshot → sync → copy → merge → archive → checksum) in
+`internal/backup`, `Run()` wired to `context.Context` and
+`progress.Reporter`, CI, a real (non-fake) `vm.VMCLIController`
+implementation backed by `vmcli` plus its integration suite, `run --vm`
+and `list` wired to that choreography, tilde-expansion and field
+validation in `config.Load`, and `init` (interactive config bootstrap —
+discovers VMs by scanning `~/Virtual Machines`, prompts for
+destination/retention, writes `config.yaml`).
 
-Not yet wired up: `internal/cli/root.go` scaffolds the `init`, `run`,
-`list`, and `status` commands, but each `RunE` still just returns "not
-yet implemented" — connecting them to the choreography engine is the
-remaining phase-1 work. Per the tracker, that's the open sub-issues under
-the epic (#1 "Phase 1 — Core CLI"): #6 `init`, #7 `run --vm`, #8 `list`,
-#9 `status`, #10 `cleanup`, #15 tilde-expansion in config paths, #16
-config field validation. #17 (an optional TUI layer) is open but
-explicitly optional for v1.
+Not yet wired up: `internal/cli/root.go`'s `status` command still just
+returns "not yet implemented" — connecting it to the choreography engine
+is the remaining phase-1 work, along with the `cleanup` command, which
+doesn't exist yet at all. Per the tracker, that's the open sub-issues
+under the epic (#1 "Phase 1 — Core CLI"): #9 `status`, #10 `cleanup`.
+#17 (an optional TUI layer) is open but explicitly optional for v1.
 
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open

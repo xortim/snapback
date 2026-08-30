@@ -64,6 +64,13 @@ func Load(path string) (*Config, error) {
 		cfg.VMs[i].VMX = expandedVMX
 	}
 
+	// A config.yaml written before Validate existed may omit compression
+	// entirely; default it to zstd (docs/design.md's documented default)
+	// rather than rejecting an otherwise-valid, previously-loadable config.
+	if cfg.Compression == "" {
+		cfg.Compression = "zstd"
+	}
+
 	if err := Validate(&cfg); err != nil {
 		return nil, fmt.Errorf("invalid config %s: %w", path, err)
 	}
