@@ -64,5 +64,9 @@ func Load(path string) (*Config, error) {
 		cfg.VMs[i].VMX = expandedVMX
 	}
 
+	if err := Validate(&cfg); err != nil {
+		return nil, fmt.Errorf("invalid config %s: %w", path, err)
+	}
+
 	return &cfg, nil
 }
