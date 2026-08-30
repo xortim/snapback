@@ -35,12 +35,13 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 			return nil, fmt.Errorf("scan %s: %w", dir, err)
 		}
 		for _, entry := range entries {
-			if !entry.IsDir() || !strings.HasSuffix(entry.Name(), ".vmwarevm") {
+			if !strings.HasSuffix(strings.ToLower(entry.Name()), ".vmwarevm") || !isVMBundleDir(dir, entry) {
 				continue
 			}
-			name := strings.TrimSuffix(entry.Name(), ".vmwarevm")
+			name := entry.Name()[:len(entry.Name())-len(".vmwarevm")]
 			vmx := filepath.Join(dir, entry.Name(), name+".vmx")
-			if _, err := os.Stat(vmx); err != nil {
+			info, err := os.Stat(vmx)
+			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
 			found = append(found, discoveredVM{Name: name, VMX: vmx})
@@ -48,6 +49,20 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Name < found[j].Name })
 	return found, nil
+}
+
+// isVMBundleDir reports whether entry (a child of dir) is a directory,
+// following a symlink if entry itself is one -- os.DirEntry.IsDir()
+// reflects only the dirent's own type and returns false for a symlink
+// even when it resolves to a directory, which would otherwise hide a
+// .vmwarevm bundle stored on other media and symlinked into the search
+// directory to keep it visible in Fusion's library.
+func isVMBundleDir(dir string, entry os.DirEntry) bool {
+	if entry.Type()&os.ModeSymlink == 0 {
+		return entry.IsDir()
+	}
+	info, err := os.Stat(filepath.Join(dir, entry.Name()))
+	return err == nil && info.IsDir()
 }
 
 // defaultVMSearchDirs returns the directories discoverVMs scans by
