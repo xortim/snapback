@@ -14,8 +14,10 @@ Go binary you can read, test, and trust.
 Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
 sync → copy → merge → archive → checksum), config loading, and the
 `VMController` interface — with both a fake for unit tests and a real
-`vmcli`-backed implementation — are implemented; `init`, `run`, and
-`list` are wired up to that choreography, while `status` is still
+`vmcli`-backed implementation — are implemented; `run` and `list` are
+wired up to that choreography, `init` is an interactive config bootstrap
+(discovers VMs, prompts for destination/retention, writes config.yaml)
+that doesn't touch the choreography itself, while `status` is still
 scaffolded, returning "not yet implemented", and `cleanup` doesn't exist
 yet. See
 [`docs/design.md`](docs/design.md) for the full ADR — architecture,
