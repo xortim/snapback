@@ -35,19 +35,37 @@ func Validate(cfg *Config) error {
 		errs = append(errs, fmt.Errorf("retention.keep_weekly must not be negative, got %d", cfg.Retention.KeepWeekly))
 	}
 
-	seen := make(map[string]bool, len(cfg.VMs))
-	for i, vm := range cfg.VMs {
-		if strings.TrimSpace(vm.Name) == "" {
+	errs = append(errs, validateVMs(cfg.VMs)...)
+
+	return errors.Join(errs...)
+}
+
+// ValidateVMs checks vms for the same per-VM problems Validate checks as
+// part of a full config: a non-empty name, a non-empty vmx path, and no
+// two VMs sharing a name once whitespace is trimmed. Exported separately
+// from Validate so a caller that builds a VM list incrementally --
+// `init`'s VM-selection prompt, in particular -- can fail fast on a bad
+// selection before collecting the rest of the config.
+func ValidateVMs(vms []VM) error {
+	return errors.Join(validateVMs(vms)...)
+}
+
+func validateVMs(vms []VM) []error {
+	var errs []error
+	seen := make(map[string]bool, len(vms))
+	for i, vm := range vms {
+		name := strings.TrimSpace(vm.Name)
+		switch {
+		case name == "":
 			errs = append(errs, fmt.Errorf("vms[%d]: name must not be empty", i))
-		} else if seen[vm.Name] {
+		case seen[name]:
 			errs = append(errs, fmt.Errorf("vms[%d]: duplicate VM name %q", i, vm.Name))
-		} else {
-			seen[vm.Name] = true
+		default:
+			seen[name] = true
 		}
 		if strings.TrimSpace(vm.VMX) == "" {
 			errs = append(errs, fmt.Errorf("vms[%d]: vmx must not be empty", i))
 		}
 	}
-
-	return errors.Join(errs...)
+	return errs
 }

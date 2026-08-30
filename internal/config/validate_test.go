@@ -87,3 +87,33 @@ func TestValidate_ReportsMultipleProblemsAtOnce(t *testing.T) {
 		t.Errorf("Validate() = %v, want it to report both problems, not just the first", err)
 	}
 }
+
+func TestValidate_RejectsDuplicateVMNames_IgnoringSurroundingWhitespace(t *testing.T) {
+	cfg := validConfig()
+	cfg.VMs = append(cfg.VMs, config.VM{Name: " dev", VMX: "/vms/dev2.vmx"})
+	err := config.Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("Validate() = %v, want an error about the duplicate VM name (whitespace-padded)", err)
+	}
+}
+
+func TestValidateVMs_RejectsDuplicateNames(t *testing.T) {
+	vms := []config.VM{
+		{Name: "dev", VMX: "/vms/dev.vmx"},
+		{Name: "dev", VMX: "/vms/dev2.vmx"},
+	}
+	err := config.ValidateVMs(vms)
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("ValidateVMs() = %v, want an error about the duplicate VM name", err)
+	}
+}
+
+func TestValidateVMs_AcceptsDistinctNames(t *testing.T) {
+	vms := []config.VM{
+		{Name: "dev", VMX: "/vms/dev.vmx"},
+		{Name: "prod", VMX: "/vms/prod.vmx"},
+	}
+	if err := config.ValidateVMs(vms); err != nil {
+		t.Errorf("ValidateVMs() = %v, want nil", err)
+	}
+}
