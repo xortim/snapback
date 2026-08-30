@@ -45,16 +45,6 @@ func defaultConfigPathFor(warnOut io.Writer) string {
 	return filepath.Join(home, ".config", "snapback", "config.yaml")
 }
 
-func newInitCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "init",
-		Short: "Interactive config bootstrap",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented(cmd)
-		},
-	}
-}
-
 func newStatusCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "status",
