@@ -96,6 +96,14 @@ func newInitCmdWithDeps(deps initDeps) *cobra.Command {
 	return cmd
 }
 
+// prompter bundles the stdin/stdout pair every init prompt needs, so each
+// prompt method below takes only the arguments specific to that prompt
+// instead of repeating the (out, in) pair on every call.
+type prompter struct {
+	out io.Writer
+	in  *bufio.Scanner
+}
+
 func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 	configPath, err := configPathForCmd(cmd)
 	if err != nil {
@@ -105,15 +113,14 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", configPath)
 	}
 
-	out := cmd.OutOrStdout()
-	in := bufio.NewScanner(cmd.InOrStdin())
+	p := prompter{out: cmd.OutOrStdout(), in: bufio.NewScanner(cmd.InOrStdin())}
 
 	candidates, err := deps.discoverVMs(deps.searchDirs())
 	if err != nil {
 		return fmt.Errorf("discover VMs: %w", err)
 	}
 
-	vms, err := promptVMs(out, in, candidates)
+	vms, err := p.promptVMs(candidates)
 	if err != nil {
 		return err
 	}
@@ -126,27 +133,27 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("invalid VM selection: %w", err)
 	}
 
-	destination, err := promptString(out, in, "Backup destination", "/Volumes/Backups/snapback")
+	destination, err := p.promptString("Backup destination", "/Volumes/Backups/snapback")
 	if err != nil {
 		return err
 	}
-	compression, err := promptChoice(out, in, "Compression (zstd/gzip)", "zstd", []string{"zstd", "gzip"})
+	compression, err := p.promptChoice("Compression (zstd/gzip)", "zstd", []string{"zstd", "gzip"})
 	if err != nil {
 		return err
 	}
-	keepLast, err := promptInt(out, in, "Keep last N backups", 5)
+	keepLast, err := p.promptInt("Keep last N backups", 5)
 	if err != nil {
 		return err
 	}
-	keepDaily, err := promptInt(out, in, "Keep daily backups for N days", 7)
+	keepDaily, err := p.promptInt("Keep daily backups for N days", 7)
 	if err != nil {
 		return err
 	}
-	keepWeekly, err := promptInt(out, in, "Keep weekly backups for N weeks", 4)
+	keepWeekly, err := p.promptInt("Keep weekly backups for N weeks", 4)
 	if err != nil {
 		return err
 	}
-	notify, err := promptBool(out, in, "Enable notifications", true)
+	notify, err := p.promptBool("Enable notifications", true)
 	if err != nil {
 		return err
 	}
@@ -174,31 +181,31 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	_, err = fmt.Fprintf(out, "wrote config to %s\n", configPath)
+	_, err = fmt.Fprintf(p.out, "wrote config to %s\n", configPath)
 	return err
 }
 
 // promptVMs lists candidates (found by discoverVMs) and asks the user
 // which to include, or -- if none were found -- falls back to prompting
 // for VMs one at a time by name and .vmx path.
-func promptVMs(out io.Writer, in *bufio.Scanner, candidates []discoveredVM) ([]config.VM, error) {
+func (p prompter) promptVMs(candidates []discoveredVM) ([]config.VM, error) {
 	if len(candidates) == 0 {
-		if _, err := fmt.Fprintln(out, "no VMs found automatically; enter them manually (blank name to stop)"); err != nil {
+		if _, err := fmt.Fprintln(p.out, "no VMs found automatically; enter them manually (blank name to stop)"); err != nil {
 			return nil, err
 		}
-		return promptManualVMs(out, in)
+		return p.promptManualVMs()
 	}
 
-	if _, err := fmt.Fprintln(out, "discovered VMs:"); err != nil {
+	if _, err := fmt.Fprintln(p.out, "discovered VMs:"); err != nil {
 		return nil, err
 	}
 	for i, c := range candidates {
-		if _, err := fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, c.Name, c.VMX); err != nil {
+		if _, err := fmt.Fprintf(p.out, "  %d) %s (%s)\n", i+1, c.Name, c.VMX); err != nil {
 			return nil, err
 		}
 	}
 
-	selection, err := promptString(out, in, `Include which VMs? (comma-separated numbers, or "all")`, "all")
+	selection, err := p.promptString(`Include which VMs? (comma-separated numbers, or "all")`, "all")
 	if err != nil {
 		return nil, err
 	}
@@ -227,17 +234,17 @@ func promptVMs(out io.Writer, in *bufio.Scanner, candidates []discoveredVM) ([]c
 	return vms, nil
 }
 
-func promptManualVMs(out io.Writer, in *bufio.Scanner) ([]config.VM, error) {
+func (p prompter) promptManualVMs() ([]config.VM, error) {
 	var vms []config.VM
 	for {
-		name, err := promptString(out, in, "VM name (blank to stop)", "")
+		name, err := p.promptString("VM name (blank to stop)", "")
 		if err != nil {
 			return nil, err
 		}
 		if name == "" {
 			return vms, nil
 		}
-		vmx, err := promptString(out, in, "  .vmx path for "+name, "")
+		vmx, err := p.promptString("  .vmx path for "+name, "")
 		if err != nil {
 			return nil, err
 		}
@@ -249,30 +256,30 @@ func promptManualVMs(out io.Writer, in *bufio.Scanner) ([]config.VM, error) {
 }
 
 // promptString prints label with defaultVal shown, reads one line from
-// in, and returns it trimmed, or defaultVal if the line is blank.
-// Returns an error if in runs out of input or fails to read -- a
+// p.in, and returns it trimmed, or defaultVal if the line is blank.
+// Returns an error if p.in runs out of input or fails to read -- a
 // truncated interactive session means the resulting config was never
 // actually reviewed by the user, so init treats that as a hard failure
 // rather than silently falling back to defaults.
-func promptString(out io.Writer, in *bufio.Scanner, label, defaultVal string) (string, error) {
-	if _, err := fmt.Fprintf(out, "%s [%s]: ", label, defaultVal); err != nil {
+func (p prompter) promptString(label, defaultVal string) (string, error) {
+	if _, err := fmt.Fprintf(p.out, "%s [%s]: ", label, defaultVal); err != nil {
 		return "", err
 	}
-	if !in.Scan() {
-		if err := in.Err(); err != nil {
+	if !p.in.Scan() {
+		if err := p.in.Err(); err != nil {
 			return "", fmt.Errorf("read input: %w", err)
 		}
 		return "", fmt.Errorf("read input: unexpected end of input")
 	}
-	line := strings.TrimSpace(in.Text())
+	line := strings.TrimSpace(p.in.Text())
 	if line == "" {
 		return defaultVal, nil
 	}
 	return line, nil
 }
 
-func promptChoice(out io.Writer, in *bufio.Scanner, label, defaultVal string, choices []string) (string, error) {
-	val, err := promptString(out, in, label, defaultVal)
+func (p prompter) promptChoice(label, defaultVal string, choices []string) (string, error) {
+	val, err := p.promptString(label, defaultVal)
 	if err != nil {
 		return "", err
 	}
@@ -284,8 +291,8 @@ func promptChoice(out io.Writer, in *bufio.Scanner, label, defaultVal string, ch
 	return "", fmt.Errorf("%q is not one of %v", val, choices)
 }
 
-func promptInt(out io.Writer, in *bufio.Scanner, label string, defaultVal int) (int, error) {
-	val, err := promptString(out, in, label, strconv.Itoa(defaultVal))
+func (p prompter) promptInt(label string, defaultVal int) (int, error) {
+	val, err := p.promptString(label, strconv.Itoa(defaultVal))
 	if err != nil {
 		return 0, err
 	}
@@ -296,12 +303,12 @@ func promptInt(out io.Writer, in *bufio.Scanner, label string, defaultVal int) (
 	return n, nil
 }
 
-func promptBool(out io.Writer, in *bufio.Scanner, label string, defaultVal bool) (bool, error) {
+func (p prompter) promptBool(label string, defaultVal bool) (bool, error) {
 	defaultStr := "y"
 	if !defaultVal {
 		defaultStr = "n"
 	}
-	val, err := promptString(out, in, label+" (y/n)", defaultStr)
+	val, err := p.promptString(label+" (y/n)", defaultStr)
 	if err != nil {
 		return false, err
 	}
