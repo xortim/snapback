@@ -15,8 +15,9 @@ Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
 sync → copy → merge → archive → checksum), config loading, and the
 `VMController` interface — with both a fake for unit tests and a real
 `vmcli`-backed implementation — are implemented; `init`, `run`, and
-`list` are wired up to that choreography, while `status` and `cleanup`
-are still scaffolded, returning "not yet implemented". See
+`list` are wired up to that choreography, while `status` is still
+scaffolded, returning "not yet implemented", and `cleanup` doesn't exist
+yet. See
 [`docs/design.md`](docs/design.md) for the full ADR — architecture,
 choreography, config schema, risks, and the open questions still worth
 verifying locally.
