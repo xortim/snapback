@@ -31,17 +31,28 @@ func newInitCmd() *cobra.Command {
 		searchDirs:  defaultVMSearchDirs,
 		discoverVMs: discoverVMs,
 		marshal:     config.Marshal,
-		writeFile: func(path string, data []byte) error {
-			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-				return fmt.Errorf("create config directory: %w", err)
-			}
-			return os.WriteFile(path, data, 0o644)
-		},
-		fileExists: func(path string) bool {
-			_, err := os.Stat(path)
-			return err == nil
-		},
+		writeFile:   writeConfigFile,
+		fileExists:  configFileExists,
 	})
+}
+
+// writeConfigFile creates the config file's parent directory if it
+// doesn't already exist, then writes data to path with 0644 permissions
+// -- world-readable, since config.yaml holds no secrets, just VM paths
+// and retention settings.
+func writeConfigFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("create config directory: %w", err)
+	}
+	return os.WriteFile(path, data, 0o644)
+}
+
+// configFileExists reports whether path exists, treating any Stat error
+// (not just os.ErrNotExist) as "does not exist" -- init's caller only
+// needs a yes/no to decide whether --force is required, not the reason.
+func configFileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func newInitCmdWithDeps(deps initDeps) *cobra.Command {

@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -30,6 +32,48 @@ func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writt
 			return nil
 		},
 		fileExists: func(string) bool { return exists },
+	}
+}
+
+func TestWriteConfigFile_CreatesParentDirAndWritesContent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nested", "config.yaml")
+	want := []byte("destination: /Volumes/Backups/snapback\n")
+
+	if err := writeConfigFile(path, want); err != nil {
+		t.Fatalf("writeConfigFile() error = %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile() error = %v", err)
+	}
+	if string(got) != string(want) {
+		t.Errorf("written content = %q, want %q", got, want)
+	}
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat() error = %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Errorf("file permissions = %o, want %o", perm, 0o644)
+	}
+}
+
+func TestConfigFileExists(t *testing.T) {
+	dir := t.TempDir()
+	existing := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(existing, []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	missing := filepath.Join(dir, "missing.yaml")
+
+	if !configFileExists(existing) {
+		t.Errorf("configFileExists(%q) = false, want true", existing)
+	}
+	if configFileExists(missing) {
+		t.Errorf("configFileExists(%q) = true, want false", missing)
 	}
 }
 
