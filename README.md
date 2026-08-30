@@ -14,11 +14,12 @@ Go binary you can read, test, and trust.
 Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
 sync → copy → merge → archive → checksum), config loading, and the
 `VMController` interface — with both a fake for unit tests and a real
-`vmcli`-backed implementation — are implemented; the
-`init`/`run`/`list`/`status` CLI commands are scaffolded but not yet
-wired to that choreography. See [`docs/design.md`](docs/design.md) for
-the full ADR — architecture, choreography, config schema, risks, and the
-open questions still worth verifying locally.
+`vmcli`-backed implementation — are implemented; `init`, `run`, and
+`list` are wired up to that choreography, while `status` and `cleanup`
+are still scaffolded, returning "not yet implemented". See
+[`docs/design.md`](docs/design.md) for the full ADR — architecture,
+choreography, config schema, risks, and the open questions still worth
+verifying locally.
 
 ## Why this exists
 
@@ -48,7 +49,7 @@ sudo mv snapback /usr/local/bin/
 ## Quick start
 
 ```sh
-snapback init        # discovers VMs via vmrun/vmcli, prompts for destination + retention
+snapback init        # scans ~/Virtual Machines for .vmwarevm bundles (falls back to manual entry), prompts for destination + retention
 snapback run --all   # on-demand backup of every configured VM
 snapback status       # last run, next scheduled run, disk usage
 ```
