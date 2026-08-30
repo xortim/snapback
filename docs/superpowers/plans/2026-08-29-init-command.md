@@ -849,7 +849,7 @@ git commit -m "feat(cli): scan ~/Virtual Machines for VM candidates"
   - `config.Validate(cfg *config.Config) error` (Task 2)
   - `config.Marshal(cfg *config.Config) ([]byte, error)` (Task 3)
   - `swapSubcommand`, `errBoom` (`internal/cli/testcmd_internal_test.go`, pre-existing)
-- Produces: `newInitCmd() *cobra.Command`, `newInitCmdWithDeps(deps initDeps) *cobra.Command`, `initDeps` struct. Consumed by `root.go` (Task 6).
+- Produces: `newInitCmd() *cobra.Command`, `newInitCmdWithDeps(deps initDeps) *cobra.Command`, `initDeps` struct. `root.go`'s existing wiring (`root.AddCommand(newInitCmd(), ...)`) already calls this — no root.go change needed beyond deleting the old stub (this task's Step 4), since the real function has the same name and signature.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -930,8 +930,10 @@ func TestInitCmd_NoDiscoveredVMs_PromptsManualEntry(t *testing.T) {
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
 	// name "devbox", vmx "/vms/devbox.vmx", blank name to stop manual
-	// entry, then defaults for destination/compression/retention/notify.
-	root.SetIn(strings.NewReader("devbox\n/vms/devbox.vmx\n\n\n\n\n\n\n"))
+	// entry, then defaults for destination/compression/retention/notify
+	// (7 more blank lines: destination, compression, keep_last,
+	// keep_daily, keep_weekly, notifications).
+	root.SetIn(strings.NewReader("devbox\n/vms/devbox.vmx\n\n\n\n\n\n\n\n"))
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
@@ -992,7 +994,7 @@ func TestInitCmd_InvalidCompressionChoice_Errors(t *testing.T) {
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
 	// blank name to skip manual VM entry, blank destination, then an
 	// invalid compression choice.
-	root.SetIn(strings.NewReader("\nbogus\n"))
+	root.SetIn(strings.NewReader("\n\nbogus\n"))
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
@@ -1325,33 +1327,14 @@ func promptBool(out io.Writer, in *bufio.Scanner, label string, defaultVal bool)
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 4: Delete the stub `newInitCmd` from `root.go`**
 
-Run: `go test ./internal/cli/... -run TestInitCmd -v`
-Expected: PASS (all 7 tests)
-
-- [ ] **Step 5: Commit**
-
-```bash
-git add internal/cli/init.go internal/cli/init_internal_test.go
-git commit -m "feat(cli): implement snapback init"
-```
-
----
-
-### Task 6: Wire `init` into `root.go`, update the design doc, final verification
-
-**Files:**
-- Modify: `internal/cli/root.go:48-56` (delete the stub `newInitCmd` — the real one now lives in `internal/cli/init.go` from Task 5)
-- Modify: `docs/design.md:94` (the command-reference line for `init` currently says `discovers VMs via vmrun list`, which was never accurate for non-running VMs and doesn't match what this plan built)
-
-**Interfaces:**
-- Consumes: `newInitCmd` (Task 5, package-level, already visible to `root.go` with no import changes needed).
-- Produces: nothing new — this task only removes the now-duplicate stub and finishes documentation.
-
-- [ ] **Step 1: Delete the stub `newInitCmd` from `root.go`**
-
-Remove these lines (48-56) from `internal/cli/root.go` — `internal/cli/init.go` (Task 5) now defines the real `newInitCmd`:
+`internal/cli/root.go` still has the old stub `newInitCmd` (lines 48-56)
+from before this task. It must go now, not in a later task — Step 3 just
+defined a second `func newInitCmd()` in the same package (`init.go`), and
+two functions with the same name in one package fail to compile, which
+would make Step 5 below fail for a reason that has nothing to do with the
+test itself. Remove these lines from `internal/cli/root.go`:
 
 ```go
 func newInitCmd() *cobra.Command {
@@ -1367,12 +1350,35 @@ func newInitCmd() *cobra.Command {
 
 (`errNotImplemented` stays — `newStatusCmd` still uses it.)
 
-- [ ] **Step 2: Run the full package build and test suite**
+- [ ] **Step 5: Run the tests to verify they pass**
+
+Run: `go test ./internal/cli/... -run TestInitCmd -v`
+Expected: PASS (all 7 tests). This also confirms the package builds cleanly with the stub gone and the real `newInitCmd` (Step 3) in place.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add internal/cli/init.go internal/cli/init_internal_test.go internal/cli/root.go
+git commit -m "feat(cli): implement snapback init"
+```
+
+---
+
+### Task 6: Update the design doc, final verification
+
+**Files:**
+- Modify: `docs/design.md:94` (the command-reference line for `init` currently says `discovers VMs via vmrun list`, which was never accurate for non-running VMs and doesn't match what this plan built)
+
+**Interfaces:**
+- Consumes: nothing — `newInitCmd` is already fully wired into `root.go`'s `AddCommand` call as of Task 5 (which also deleted the old stub, since leaving both would have failed to compile). This task is documentation plus a final whole-suite check, no code changes.
+- Produces: nothing new.
+
+- [ ] **Step 1: Run the full package build and test suite**
 
 Run: `go build ./... && go test ./... -v`
-Expected: PASS — no duplicate `newInitCmd` symbol, no regressions in `internal/cli` or `internal/config`. `root_test.go`'s command-name list (`init, run, list, status`) is unaffected since the command name doesn't change.
+Expected: PASS — no duplicate `newInitCmd` symbol (Task 5 already removed the stub), no regressions in `internal/cli` or `internal/config`. `root_test.go`'s command-name list (`init, run, list, status`) is unaffected since the command name doesn't change.
 
-- [ ] **Step 3: Update the command-reference line in `docs/design.md`**
+- [ ] **Step 2: Update the command-reference line in `docs/design.md`**
 
 Change line 94 from:
 
@@ -1386,19 +1392,19 @@ to:
 | `snapback init`                 | Interactive config bootstrap — discovers VMs by scanning `~/Virtual Machines` for `.vmwarevm` bundles, prompts for destination/retention (falls back to manual entry if none are found) |
 ```
 
-- [ ] **Step 4: Run lint and the full test suite**
+- [ ] **Step 3: Run lint and the full test suite**
 
 Run: `make lint && make test`
 Expected: both PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
-git add internal/cli/root.go docs/design.md
-git commit -m "feat(cli): wire snapback init into the root command"
+git add docs/design.md
+git commit -m "docs(design): correct init's VM-discovery mechanism in the command reference"
 ```
 
-- [ ] **Step 6: Build**
+- [ ] **Step 5: Build**
 
 Run: `make build`
 Expected: PASS, produces `dist/<goos-goarch>/snapback` with `init` fully working end-to-end (manually try `dist/*/snapback init --config /tmp/smoke-config.yaml` against a scratch `~/Virtual Machines`-like temp dir if you want a real-terminal smoke test, though it's not required for the automated suite).
