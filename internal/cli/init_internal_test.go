@@ -133,6 +133,33 @@ func TestInitCmd_NoDiscoveredVMs_PromptsManualEntry(t *testing.T) {
 	}
 }
 
+func TestInitCmd_DuplicateVMSelection_FailsBeforeRemainingPrompts(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps([]discoveredVM{
+		{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"},
+	}, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// Select the one candidate twice. If init deferred validation to the
+	// end, it would next try to read the destination prompt, find no more
+	// input, and fail with an "unexpected end of input" error instead --
+	// this test only passes if the duplicate is caught immediately after
+	// selection.
+	root.SetIn(strings.NewReader("1,1\n"))
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("Execute() error = %v, want an error about the duplicate VM selection", err)
+	}
+	if written != nil {
+		t.Errorf("writeFile was called, want init to fail before writing")
+	}
+}
+
 func TestInitCmd_ExistingConfig_WithoutForce_Errors(t *testing.T) {
 	var written []byte
 	var writtenPath string

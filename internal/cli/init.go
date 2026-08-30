@@ -122,6 +122,9 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 			return err
 		}
 	}
+	if err := config.ValidateVMs(vms); err != nil {
+		return fmt.Errorf("invalid VM selection: %w", err)
+	}
 
 	destination, err := promptString(out, in, "Backup destination", "/Volumes/Backups/snapback")
 	if err != nil {
