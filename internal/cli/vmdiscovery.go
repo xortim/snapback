@@ -9,6 +9,12 @@ import (
 	"strings"
 )
 
+// vmBundleExt is the directory extension Fusion uses for a VM bundle
+// (e.g. myvm.vmwarevm). Matched case-insensitively in discoverVMs since a
+// bundle copied or renamed from elsewhere can carry a differently-cased
+// extension.
+const vmBundleExt = ".vmwarevm"
+
 // discoveredVM is one candidate VM found by discoverVMs, offered to the
 // user during `snapback init` for inclusion in config.yaml.
 type discoveredVM struct {
@@ -35,10 +41,10 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 			return nil, fmt.Errorf("scan %s: %w", dir, err)
 		}
 		for _, entry := range entries {
-			if !strings.HasSuffix(strings.ToLower(entry.Name()), ".vmwarevm") || !isVMBundleDir(dir, entry) {
+			if !strings.HasSuffix(strings.ToLower(entry.Name()), vmBundleExt) || !isVMBundleDir(dir, entry) {
 				continue
 			}
-			name := entry.Name()[:len(entry.Name())-len(".vmwarevm")]
+			name := entry.Name()[:len(entry.Name())-len(vmBundleExt)]
 			vmx := filepath.Join(dir, entry.Name(), name+".vmx")
 			info, err := os.Stat(vmx)
 			if err != nil || !info.Mode().IsRegular() {
