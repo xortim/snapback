@@ -152,8 +152,8 @@ func TestInitCmd_DuplicateVMSelection_FailsBeforeRemainingPrompts(t *testing.T) 
 	root.SetErr(&bytes.Buffer{})
 
 	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("Execute() error = %v, want an error about the duplicate VM selection", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("Execute() error = %v, want an error wrapped as \"invalid VM selection\" mentioning \"duplicate\"", err)
 	}
 	if written != nil {
 		t.Errorf("writeFile was called, want init to fail before writing")
