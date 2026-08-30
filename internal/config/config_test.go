@@ -19,11 +19,11 @@ retention:
   keep_weekly: 4
 vms:
   - name: dev-ubuntu
-    vmx: ~/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
+    vmx: /Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
     schedule: "0 2 * * *"
     comment_template: "nightly auto-backup"
   - name: win-testbed
-    vmx: ~/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
+    vmx: /Users/testuser/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
     schedule: "0 2 * * 0"
 notifications:
   enabled: true
@@ -47,7 +47,7 @@ notifications:
 	if len(cfg.VMs) != 2 {
 		t.Fatalf("len(VMs) = %d, want 2", len(cfg.VMs))
 	}
-	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "~/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "0 2 * * *" || cfg.VMs[0].CommentTemplate != "nightly auto-backup" {
+	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "/Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "0 2 * * *" || cfg.VMs[0].CommentTemplate != "nightly auto-backup" {
 		t.Errorf("VMs[0] = %+v, unexpected", cfg.VMs[0])
 	}
 	if cfg.VMs[1].Name != "win-testbed" || cfg.VMs[1].CommentTemplate != "" {
@@ -74,6 +74,36 @@ func TestLoad_MalformedYAML_ErrorNamesPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), path) {
 		t.Errorf("Load error = %q, want it to name the config path %q", err.Error(), path)
+	}
+}
+
+func TestLoad_ExpandsTildeInDestinationAndVMX(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	path := writeTempConfig(t, `
+destination: ~/backups
+compression: zstd
+retention:
+  keep_last: 1
+  keep_daily: 1
+  keep_weekly: 1
+vms:
+  - name: dev
+    vmx: ~/Virtual Machines/dev.vmwarevm/dev.vmx
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v", err)
+	}
+	wantDest := filepath.Join(home, "backups")
+	if cfg.Destination != wantDest {
+		t.Errorf("Destination = %q, want %q", cfg.Destination, wantDest)
+	}
+	wantVMX := filepath.Join(home, "Virtual Machines/dev.vmwarevm/dev.vmx")
+	if cfg.VMs[0].VMX != wantVMX {
+		t.Errorf("VMs[0].VMX = %q, want %q", cfg.VMs[0].VMX, wantVMX)
 	}
 }
 

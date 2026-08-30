@@ -49,5 +49,20 @@ func Load(path string) (*Config, error) {
 	if err := k.Unmarshal("", &cfg); err != nil {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+
+	expandedDest, err := expandTilde(cfg.Destination)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: expand destination: %w", path, err)
+	}
+	cfg.Destination = expandedDest
+
+	for i, vm := range cfg.VMs {
+		expandedVMX, err := expandTilde(vm.VMX)
+		if err != nil {
+			return nil, fmt.Errorf("parse %s: expand vms[%d].vmx: %w", path, i, err)
+		}
+		cfg.VMs[i].VMX = expandedVMX
+	}
+
 	return &cfg, nil
 }
