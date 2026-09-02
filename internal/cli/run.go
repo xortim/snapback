@@ -9,24 +9,10 @@ import (
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/progress"
-	"github.com/xortim/snapback/internal/vm"
 )
 
-// runDeps groups run's external dependencies so tests can substitute a
-// fake config loader and vm.Controller instead of touching the real
-// filesystem or requiring a Fusion install.
-type runDeps struct {
-	loadConfig    func(path string) (*config.Config, error)
-	newController func() (vm.Controller, error)
-}
-
 func newRunCmd() *cobra.Command {
-	return newRunCmdWithDeps(runDeps{
-		loadConfig: config.Load,
-		newController: func() (vm.Controller, error) {
-			return vm.NewVMCLIController()
-		},
-	})
+	return newRunCmdWithDeps(defaultVMCmdDeps())
 }
 
 func newRunCmdWithDeps(deps runDeps) *cobra.Command {
@@ -44,10 +30,7 @@ func newRunCmdWithDeps(deps runDeps) *cobra.Command {
 			return runVM(cmd, deps, vmName)
 		},
 	}
-	cmd.Flags().StringVar(&vmName, "vm", "", "name of the VM to back up, as configured")
-	if err := cmd.MarkFlagRequired("vm"); err != nil {
-		panic(err)
-	}
+	addRequiredVMFlag(cmd, &vmName, "name of the VM to back up, as configured")
 
 	return cmd
 }

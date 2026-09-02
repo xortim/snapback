@@ -8,25 +8,10 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/backup"
-	"github.com/xortim/snapback/internal/config"
-	"github.com/xortim/snapback/internal/vm"
 )
 
-// cleanupDeps groups cleanup's external dependencies so tests can
-// substitute a fake config loader and vm.Controller instead of touching
-// the real filesystem or requiring a Fusion install.
-type cleanupDeps struct {
-	loadConfig    func(path string) (*config.Config, error)
-	newController func() (vm.Controller, error)
-}
-
 func newCleanupCmd() *cobra.Command {
-	return newCleanupCmdWithDeps(cleanupDeps{
-		loadConfig: config.Load,
-		newController: func() (vm.Controller, error) {
-			return vm.NewVMCLIController()
-		},
-	})
+	return newCleanupCmdWithDeps(defaultVMCmdDeps())
 }
 
 func newCleanupCmdWithDeps(deps cleanupDeps) *cobra.Command {
@@ -44,10 +29,7 @@ func newCleanupCmdWithDeps(deps cleanupDeps) *cobra.Command {
 			return runCleanup(cmd, deps, vmName)
 		},
 	}
-	cmd.Flags().StringVar(&vmName, "vm", "", "name of the VM to clean up, as configured")
-	if err := cmd.MarkFlagRequired("vm"); err != nil {
-		panic(err)
-	}
+	addRequiredVMFlag(cmd, &vmName, "name of the VM to clean up, as configured")
 
 	return cmd
 }
