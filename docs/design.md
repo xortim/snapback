@@ -91,7 +91,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 
 | Command                         | Description                                                                                      |
 | ------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `snapback init`                 | Interactive config bootstrap — discovers VMs via `vmrun list`, prompts for destination/retention |
+| `snapback init`                 | Interactive config bootstrap — discovers VMs by scanning `~/Virtual Machines` for `.vmwarevm` bundles, prompts for destination/retention (falls back to manual entry if none are found) |
 | `snapback run --vm <name>`      | On-demand backup of one VM                                                                       |
 | `snapback run --all`            | Backup every VM in config (used by launchd)                                                      |
 | `snapback list`                 | List backup archives with timestamp, size, comment                                               |

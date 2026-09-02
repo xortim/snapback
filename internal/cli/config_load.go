@@ -8,14 +8,21 @@ import (
 	"github.com/xortim/snapback/internal/config"
 )
 
+// configPathForCmd reads the --config persistent flag. Shared by every
+// subcommand that needs the config path, whether or not the config file
+// exists yet (init doesn't require it to; run/list/status do).
+func configPathForCmd(cmd *cobra.Command) (string, error) {
+	return cmd.Flags().GetString("config")
+}
+
 // loadConfigForCmd reads the --config flag from cmd and calls loadConfig
 // with it, wrapping any load error with enough context to identify that
 // it came from config loading. Shared by every subcommand that needs the
-// user's config.yaml (run, list, and eventually status/init), so a
-// wording change (e.g. the friendlier missing-file message tracked in
-// #32) only needs to be made once.
+// user's config.yaml (run, list, and eventually status), so a wording
+// change (e.g. the friendlier missing-file message tracked in #32) only
+// needs to be made once.
 func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.Config, error)) (cfg *config.Config, configPath string, err error) {
-	configPath, err = cmd.Flags().GetString("config")
+	configPath, err = configPathForCmd(cmd)
 	if err != nil {
 		return nil, "", err
 	}
