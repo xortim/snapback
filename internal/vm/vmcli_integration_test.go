@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"sort"
 	"testing"
 
 	"github.com/xortim/snapback/internal/vm"
@@ -81,6 +82,75 @@ func TestIntegration_SnapshotLifecycle(t *testing.T) {
 	}
 	if slices.Contains(snapshots, name) {
 		t.Fatalf("ListSnapshots() = %v, want it to no longer contain %q after delete", snapshots, name)
+	}
+}
+
+// TestIntegration_DeleteSnapshots_Batch checks the assumption documented
+// on VMCLIController.DeleteSnapshots: that snapshot uids stay stable
+// across the batch's own deletes, so resolving all of them from one
+// query up front (rather than re-resolving before each delete, like
+// DeleteSnapshot does) is safe. It creates several snapshots, deletes
+// them all in one DeleteSnapshots call, and confirms every one is
+// actually gone and nothing else on the VM was touched. Neither the fake
+// controller (canned JSON, doesn't change across deletes) nor the other
+// integration tests (which only ever create one snapshot at a time) can
+// catch a real uid shift -- this is the one that can.
+func TestIntegration_DeleteSnapshots_Batch(t *testing.T) {
+	vmxPath := integrationVMX(t)
+	ctrl, err := vm.NewVMCLIController()
+	if err != nil {
+		t.Fatalf("NewVMCLIController() error = %v", err)
+	}
+
+	before, err := ctrl.ListSnapshots(vmxPath)
+	if err != nil {
+		t.Fatalf("ListSnapshots() error = %v", err)
+	}
+
+	names := []string{
+		"snapback-integration-batch-test-1",
+		"snapback-integration-batch-test-2",
+		"snapback-integration-batch-test-3",
+	}
+	for _, name := range names {
+		if err := ctrl.Snapshot(vmxPath, name); err != nil {
+			t.Fatalf("Snapshot(%q) error = %v", name, err)
+		}
+		t.Cleanup(func() {
+			_ = ctrl.DeleteSnapshot(vmxPath, name)
+		})
+	}
+
+	deleted, err := ctrl.DeleteSnapshots(vmxPath, names)
+	if err != nil {
+		t.Fatalf("DeleteSnapshots() error = %v", err)
+	}
+	gotDeleted := slices.Clone(deleted)
+	wantDeleted := slices.Clone(names)
+	sort.Strings(gotDeleted)
+	sort.Strings(wantDeleted)
+	if !slices.Equal(gotDeleted, wantDeleted) {
+		t.Fatalf("DeleteSnapshots() deleted = %v, want %v", deleted, names)
+	}
+
+	after, err := ctrl.ListSnapshots(vmxPath)
+	if err != nil {
+		t.Fatalf("ListSnapshots() error = %v", err)
+	}
+	for _, name := range names {
+		if slices.Contains(after, name) {
+			t.Errorf("ListSnapshots() = %v, want it to no longer contain %q after DeleteSnapshots", after, name)
+		}
+	}
+
+	// Nothing else on the VM should have been affected: the snapshot set
+	// left behind should match what was there before this test started.
+	gotAfter := slices.Clone(after)
+	wantAfter := slices.Clone(before)
+	sort.Strings(gotAfter)
+	sort.Strings(wantAfter)
+	if !slices.Equal(gotAfter, wantAfter) {
+		t.Fatalf("ListSnapshots() after DeleteSnapshots = %v, want it back to the pre-test state %v", after, before)
 	}
 }
 

@@ -14,6 +14,12 @@ import (
 	"github.com/xortim/snapback/internal/vm"
 )
 
+// SnapshotPrefix names the snapshot Run takes during the choreography
+// (SnapshotPrefix + timestamp) -- exported so internal/cli's cleanup
+// command can recognize the same orphaned-snapshot naming pattern
+// without duplicating the literal.
+const SnapshotPrefix = "snapback-"
+
 // Options configures a single backup run.
 type Options struct {
 	VMName      string
@@ -84,6 +90,13 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	if opts.Destination == "" {
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("destination is required")}
 	}
+
+	lock, err := AcquireLock(opts.Destination, opts.VMName)
+	if err != nil {
+		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("acquire backup lock: %w", err)}
+	}
+	defer func() { _ = lock.Release() }()
+
 	vmxInfo, err := os.Stat(opts.VMXPath)
 	if err != nil {
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("vmx path: %w", err)}
@@ -119,7 +132,7 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	startTime := now().UTC()
 	ts := startTime.Format("20060102T150405Z")
 	archiveID := fmt.Sprintf("%s-%s", opts.VMName, ts)
-	snapshotName := "snapback-" + ts
+	snapshotName := SnapshotPrefix + ts
 
 	reporter.Report(progress.Event{Stage: progress.CheckingTools, Message: "checking VMware Tools state"})
 	toolsState, err := ctrl.CheckToolsState(opts.VMXPath)

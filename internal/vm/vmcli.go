@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -230,4 +231,61 @@ func (c *VMCLIController) DeleteSnapshot(vmxPath, name string) error {
 		return vmcliError("delete snapshot", stderr, err)
 	}
 	return nil
+}
+
+// DeleteSnapshots satisfies Controller.DeleteSnapshots
+// (internal/vm/controller.go): unlike calling DeleteSnapshot once per
+// name, this resolves every uid from a single Snapshot query call, so
+// cleaning up N orphaned snapshots costs one query plus N deletes
+// instead of N queries plus N deletes.
+//
+// This assumes snapshot uids stay stable across the batch's own deletes
+// -- that deleting snapshot A doesn't change snapshot B's uid, which
+// every later delete in the same call still relies on having resolved
+// up front. Unlike DeleteSnapshot (which re-resolves the uid fresh
+// before every single delete), that assumption is never re-checked
+// mid-batch here. It's unconfirmed against real vmcli: each delete
+// consolidates a delta into its parent, a real mutation of the snapshot
+// tree, and nothing rules out Fusion reassigning or reusing uids as a
+// result. Neither the fake-controller unit tests (canned JSON, doesn't
+// change across deletes) nor the existing integration suite (only ever
+// creates one snapshot at a time) can catch a real uid shift.
+// TestIntegration_DeleteSnapshots_Batch (vmcli_integration_test.go)
+// exists to check this against a real VM; until someone runs that
+// against a scratch VM, treat this batching as unverified-but-
+// currently-safe, not confirmed.
+func (c *VMCLIController) DeleteSnapshots(vmxPath string, names []string) (deleted []string, err error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	snapshots, qerr := c.querySnapshots(vmxPath)
+	if qerr != nil {
+		return nil, qerr
+	}
+	uidsByName := make(map[string][]int64, len(snapshots))
+	for _, s := range snapshots {
+		uidsByName[s.DisplayName] = append(uidsByName[s.DisplayName], s.UID)
+	}
+
+	var errs []error
+	for _, name := range names {
+		uids := uidsByName[name]
+		switch len(uids) {
+		case 0:
+			errs = append(errs, fmt.Errorf("snapshot %q not found for %q", name, vmxPath))
+			continue
+		case 1:
+			// exactly one match -- proceed to delete below
+		default:
+			errs = append(errs, fmt.Errorf("snapshot name %q is ambiguous: %d snapshots on %q share this display name", name, len(uids), vmxPath))
+			continue
+		}
+		_, stderr, delErr := c.run(vmxPath, "Snapshot", "Delete", strconv.FormatInt(uids[0], 10))
+		if delErr != nil {
+			errs = append(errs, vmcliError(fmt.Sprintf("delete snapshot %q", name), stderr, delErr))
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	return deleted, errors.Join(errs...)
 }

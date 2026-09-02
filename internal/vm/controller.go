@@ -49,4 +49,14 @@ type Controller interface {
 	Snapshot(vmxPath, name string) error
 	ListSnapshots(vmxPath string) ([]string, error)
 	DeleteSnapshot(vmxPath, name string) error
+	// DeleteSnapshots removes every snapshot in names from vmxPath. An
+	// implementation can resolve all of them from a single snapshot
+	// listing instead of one lookup per name (see vmcli.go's
+	// implementation) -- internal/cli's cleanup command uses this instead
+	// of looping DeleteSnapshot, since it already knows the exact set of
+	// orphaned names to remove up front. It returns the subset of names
+	// actually removed; a failure on one name is joined into err rather
+	// than aborting the rest, so a caller still removes everything it can
+	// and reports what it couldn't.
+	DeleteSnapshots(vmxPath string, names []string) (deleted []string, err error)
 }

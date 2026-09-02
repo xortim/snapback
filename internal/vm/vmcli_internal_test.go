@@ -381,6 +381,67 @@ func TestVMCLIController_DeleteSnapshot_AmbiguousNameReturnsErrorWithoutDeleting
 	}
 }
 
+func TestVMCLIController_DeleteSnapshots_ResolvesAllUIDsFromOneQuery(t *testing.T) {
+	queryCalls := 0
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		switch {
+		case args[1] == "Snapshot" && args[2] == "query":
+			queryCalls++
+			return []byte(`{"currentUID":5,"helperUID":0,"snapshots":[
+				{"displayName":"snapback-1","parentUID":0,"uid":3},
+				{"displayName":"snapback-2","parentUID":3,"uid":5}
+			]}`), nil, nil
+		case args[1] == "Snapshot" && args[2] == "Delete":
+			return nil, nil, nil
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	deleted, err := c.DeleteSnapshots(testVMX, []string{"snapback-1", "snapback-2"})
+	if err != nil {
+		t.Fatalf("DeleteSnapshots() error = %v, want nil", err)
+	}
+	if len(deleted) != 2 {
+		t.Errorf("DeleteSnapshots() deleted = %v, want both names", deleted)
+	}
+	if queryCalls != 1 {
+		t.Errorf("Snapshot query called %d times, want exactly 1 for a 2-name batch", queryCalls)
+	}
+	var deleteUIDs []string
+	for _, call := range fr.calls {
+		if call[1] == "Snapshot" && call[2] == "Delete" {
+			deleteUIDs = append(deleteUIDs, call[3])
+		}
+	}
+	if len(deleteUIDs) != 2 {
+		t.Errorf("Delete called %d times, want 2", len(deleteUIDs))
+	}
+}
+
+func TestVMCLIController_DeleteSnapshots_PartialFailureReturnsDeletedAndJoinedError(t *testing.T) {
+	fr := &fakeRun{handler: func(args []string) ([]byte, []byte, error) {
+		switch {
+		case args[1] == "Snapshot" && args[2] == "query":
+			return []byte(`{"currentUID":3,"helperUID":0,"snapshots":[{"displayName":"snapback-1","parentUID":0,"uid":3}]}`), nil, nil
+		case args[1] == "Snapshot" && args[2] == "Delete":
+			return nil, nil, nil
+		}
+		t.Fatalf("unexpected call: %v", args)
+		return nil, nil, nil
+	}}
+	c := &VMCLIController{run: fr.run}
+
+	deleted, err := c.DeleteSnapshots(testVMX, []string{"snapback-1", "does-not-exist"})
+	if len(deleted) != 1 || deleted[0] != "snapback-1" {
+		t.Errorf("DeleteSnapshots() deleted = %v, want only snapback-1", deleted)
+	}
+	if err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("DeleteSnapshots() error = %v, want it to name the missing snapshot", err)
+	}
+}
+
 func TestFindVMCLI_EnvOverrideTakesPrecedence(t *testing.T) {
 	t.Setenv("SNAPBACK_VMCLI_PATH", "/custom/vmcli")
 
