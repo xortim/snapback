@@ -90,6 +90,13 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	if opts.Destination == "" {
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("destination is required")}
 	}
+
+	lock, err := AcquireLock(opts.Destination, opts.VMName)
+	if err != nil {
+		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("acquire backup lock: %w", err)}
+	}
+	defer func() { _ = lock.Release() }()
+
 	vmxInfo, err := os.Stat(opts.VMXPath)
 	if err != nil {
 		return nil, &RunError{Stage: progress.CheckingTools, Err: fmt.Errorf("vmx path: %w", err)}

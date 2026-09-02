@@ -551,6 +551,85 @@ func TestRun_EmptyDestination_ReturnsError(t *testing.T) {
 	}
 }
 
+func TestRun_LockAlreadyHeld_ReturnsErrorWithoutTouchingVM(t *testing.T) {
+	srcBundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(srcBundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	vmxPath := filepath.Join(srcBundle, "myvm.vmx")
+	if err := os.WriteFile(vmxPath, []byte("guestOS = \"ubuntu-64\"\n"), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+
+	destination := t.TempDir()
+	lock, err := backup.AcquireLock(destination, "myvm")
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v, want nil", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	opts := backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: destination,
+	}
+
+	_, err = backup.Run(t.Context(), fake, progress.NoOpReporter{}, opts)
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("Run() error = %v, want a *RunError", err)
+	}
+	if runErr.Stage != progress.CheckingTools {
+		t.Errorf("RunError.Stage = %v, want %v", runErr.Stage, progress.CheckingTools)
+	}
+	if !errors.Is(err, backup.ErrLocked) {
+		t.Errorf("Run() error = %v, want it to wrap backup.ErrLocked", err)
+	}
+	snapshots, lerr := fake.ListSnapshots(vmxPath)
+	if lerr != nil {
+		t.Fatalf("ListSnapshots() error = %v", lerr)
+	}
+	if len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want no snapshot taken while the lock was held", snapshots)
+	}
+}
+
+func TestRun_HappyPath_ReleasesLockForReacquisition(t *testing.T) {
+	srcBundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(srcBundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	vmxPath := filepath.Join(srcBundle, "myvm.vmx")
+	if err := os.WriteFile(vmxPath, []byte("guestOS = \"ubuntu-64\"\n"), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcBundle, "disk.vmdk"), []byte("fake disk"), 0o644); err != nil {
+		t.Fatalf("write disk: %v", err)
+	}
+
+	destination := t.TempDir()
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	opts := backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: destination,
+		StagingDir:  t.TempDir(),
+	}
+
+	if _, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, opts); err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	lock, err := backup.AcquireLock(destination, "myvm")
+	if err != nil {
+		t.Fatalf("AcquireLock() after Run() error = %v, want nil (Run must release its lock)", err)
+	}
+	_ = lock.Release()
+}
+
 func TestRun_MissingVMXPath_ReturnsError(t *testing.T) {
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsRunning
