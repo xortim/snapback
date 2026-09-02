@@ -69,7 +69,7 @@ clean: ## Clean the workspace and dist/
 .PHONY: tools
 tools: ## Install tools needed for development
 	@$(MAKE) --no-print-directory log-$@
-	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.10.1
+	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 	@go install github.com/goreleaser/goreleaser/v2@latest
 	@echo "NOTE: git-cliff must be installed separately (brew install git-cliff or cargo install git-cliff)"
 
