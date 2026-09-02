@@ -81,7 +81,7 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 	if err != nil {
 		var runErr *backup.RunError
 		if errors.As(err, &runErr) && runErr.Stage >= progress.Snapshotting {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: a snapshot may remain on %q; remove it manually until `snapback cleanup` exists\n", vmName)
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: a snapshot may remain on %q; run `snapback cleanup --vm %s` to remove it\n", vmName, vmName)
 		}
 		return err
 	}
