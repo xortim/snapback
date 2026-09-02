@@ -3,6 +3,7 @@ package vm
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -230,4 +231,45 @@ func (c *VMCLIController) DeleteSnapshot(vmxPath, name string) error {
 		return vmcliError("delete snapshot", stderr, err)
 	}
 	return nil
+}
+
+// DeleteSnapshots satisfies Controller.DeleteSnapshots
+// (internal/vm/controller.go): unlike calling DeleteSnapshot once per
+// name, this resolves every uid from a single Snapshot query call, so
+// cleaning up N orphaned snapshots costs one query plus N deletes
+// instead of N queries plus N deletes.
+func (c *VMCLIController) DeleteSnapshots(vmxPath string, names []string) (deleted []string, err error) {
+	if len(names) == 0 {
+		return nil, nil
+	}
+	snapshots, qerr := c.querySnapshots(vmxPath)
+	if qerr != nil {
+		return nil, qerr
+	}
+	uidsByName := make(map[string][]int64, len(snapshots))
+	for _, s := range snapshots {
+		uidsByName[s.DisplayName] = append(uidsByName[s.DisplayName], s.UID)
+	}
+
+	var errs []error
+	for _, name := range names {
+		uids := uidsByName[name]
+		switch len(uids) {
+		case 0:
+			errs = append(errs, fmt.Errorf("snapshot %q not found for %q", name, vmxPath))
+			continue
+		case 1:
+			// exactly one match -- proceed to delete below
+		default:
+			errs = append(errs, fmt.Errorf("snapshot name %q is ambiguous: %d snapshots on %q share this display name", name, len(uids), vmxPath))
+			continue
+		}
+		_, stderr, delErr := c.run(vmxPath, "Snapshot", "Delete", strconv.FormatInt(uids[0], 10))
+		if delErr != nil {
+			errs = append(errs, vmcliError(fmt.Sprintf("delete snapshot %q", name), stderr, delErr))
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	return deleted, errors.Join(errs...)
 }

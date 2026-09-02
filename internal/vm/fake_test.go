@@ -2,6 +2,7 @@ package vm_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xortim/snapback/internal/vm"
@@ -148,6 +149,29 @@ func TestFakeVMController_DeleteSnapshot_ReturnsInjectedErrorAndDoesNotMutate(t 
 	want := []string{"snapback-1"}
 	if !equalStrings(got, want) {
 		t.Errorf("ListSnapshots() = %v, want %v (delete should not have mutated state)", got, want)
+	}
+}
+
+func TestFakeVMController_DeleteSnapshots_RemovesEachAndReportsMissing(t *testing.T) {
+	f := vm.NewFakeVMController()
+	const vmx = "/vms/example.vmwarevm/example.vmx"
+	if err := f.Snapshot(vmx, "snapback-1"); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	deleted, err := f.DeleteSnapshots(vmx, []string{"snapback-1", "does-not-exist"})
+	if len(deleted) != 1 || deleted[0] != "snapback-1" {
+		t.Errorf("DeleteSnapshots() deleted = %v, want only snapback-1", deleted)
+	}
+	if err == nil || !strings.Contains(err.Error(), "does-not-exist") {
+		t.Errorf("DeleteSnapshots() error = %v, want it to name the missing snapshot", err)
+	}
+	remaining, lerr := f.ListSnapshots(vmx)
+	if lerr != nil {
+		t.Fatalf("ListSnapshots() error = %v", lerr)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty after DeleteSnapshots", remaining)
 	}
 }
 

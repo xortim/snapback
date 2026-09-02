@@ -1,6 +1,9 @@
 package vm
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // FakeVMController is an in-memory Controller for unit tests. It tracks
 // snapshots per vmxPath and lets tests inject an error per method by
@@ -62,4 +65,20 @@ func (f *FakeVMController) DeleteSnapshot(vmxPath, name string) error {
 		}
 	}
 	return fmt.Errorf("snapshot %q not found for %q", name, vmxPath)
+}
+
+// DeleteSnapshots removes each snapshot in names, honoring
+// DeleteSnapshotErr the same way DeleteSnapshot does. It doesn't
+// short-circuit on the first failure -- callers rely on getting every
+// name it could remove even when some fail.
+func (f *FakeVMController) DeleteSnapshots(vmxPath string, names []string) (deleted []string, err error) {
+	var errs []error
+	for _, name := range names {
+		if delErr := f.DeleteSnapshot(vmxPath, name); delErr != nil {
+			errs = append(errs, fmt.Errorf("remove snapshot %q: %w", name, delErr))
+			continue
+		}
+		deleted = append(deleted, name)
+	}
+	return deleted, errors.Join(errs...)
 }
