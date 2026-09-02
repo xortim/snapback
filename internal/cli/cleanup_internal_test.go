@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/vm"
 )
@@ -155,7 +156,7 @@ func TestCleanupCmd_RemovesOnlySnapbackPrefixedSnapshots(t *testing.T) {
 
 	root := swapSubcommand(t, "cleanup", newCleanupCmdWithDeps(cleanupDeps{
 		loadConfig: func(path string) (*config.Config, error) {
-			return &config.Config{VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
+			return &config.Config{Destination: t.TempDir(), VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
 		},
 		newController: func() (vm.Controller, error) { return fake, nil },
 	}))
@@ -190,7 +191,7 @@ func TestCleanupCmd_DeleteFailure_ReturnsWrappedError(t *testing.T) {
 
 	root := swapSubcommand(t, "cleanup", newCleanupCmdWithDeps(cleanupDeps{
 		loadConfig: func(path string) (*config.Config, error) {
-			return &config.Config{VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
+			return &config.Config{Destination: t.TempDir(), VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
 		},
 		newController: func() (vm.Controller, error) { return fake, nil },
 	}))
@@ -207,5 +208,82 @@ func TestCleanupCmd_DeleteFailure_ReturnsWrappedError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "snapback-20260101T000000Z") {
 		t.Errorf("Execute() error = %v, want it to name the snapshot that failed to delete", err)
+	}
+}
+
+func TestCleanupCmd_LockHeld_SkipsWithoutErrorAndDoesNotDelete(t *testing.T) {
+	const vmx = "/vms/myvm.vmwarevm/myvm.vmx"
+	fake := vm.NewFakeVMController()
+	if err := fake.Snapshot(vmx, "snapback-20260101T000000Z"); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	dest := t.TempDir()
+	lock, err := backup.AcquireLock(dest, "myvm")
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v, want nil", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	root := swapSubcommand(t, "cleanup", newCleanupCmdWithDeps(cleanupDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{Destination: dest, VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+	}))
+	var out bytes.Buffer
+	root.SetArgs([]string{"cleanup", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil (a held lock is skipped, not an error)", err)
+	}
+	if !strings.Contains(out.String(), "in progress") {
+		t.Errorf("stdout = %q, want a message about a backup in progress", out.String())
+	}
+
+	remaining, lerr := fake.ListSnapshots(vmx)
+	if lerr != nil {
+		t.Fatalf("ListSnapshots() error = %v", lerr)
+	}
+	if len(remaining) != 1 {
+		t.Errorf("ListSnapshots() = %v, want the snapshot untouched while the lock was held", remaining)
+	}
+}
+
+func TestCleanupCmd_MultipleOrphans_DeletesInOneBatchCall(t *testing.T) {
+	const vmx = "/vms/myvm.vmwarevm/myvm.vmx"
+	fake := vm.NewFakeVMController()
+	if err := fake.Snapshot(vmx, "snapback-20260101T000000Z"); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+	if err := fake.Snapshot(vmx, "snapback-20260102T000000Z"); err != nil {
+		t.Fatalf("seed snapshot: %v", err)
+	}
+
+	root := swapSubcommand(t, "cleanup", newCleanupCmdWithDeps(cleanupDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{Destination: t.TempDir(), VMs: []config.VM{{Name: "myvm", VMX: vmx}}}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+	}))
+	var out bytes.Buffer
+	root.SetArgs([]string{"cleanup", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if strings.Count(out.String(), "removed orphaned snapshot") != 2 {
+		t.Errorf("stdout = %q, want both orphans reported removed", out.String())
+	}
+	remaining, lerr := fake.ListSnapshots(vmx)
+	if lerr != nil {
+		t.Fatalf("ListSnapshots() error = %v", lerr)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("ListSnapshots() = %v, want both orphans removed", remaining)
 	}
 }

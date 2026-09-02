@@ -55,30 +55,43 @@ func runCleanup(cmd *cobra.Command, deps cleanupDeps, vmName string) error {
 		return fmt.Errorf("list snapshots for %q: %w", vmName, err)
 	}
 
-	out := cmd.OutOrStdout()
-	var deleteErrs []error
-	found := false
+	var matching []string
 	for _, name := range snapshots {
-		if !strings.HasPrefix(name, backup.SnapshotPrefix) {
-			continue
+		if strings.HasPrefix(name, backup.SnapshotPrefix) {
+			matching = append(matching, name)
 		}
-		found = true
-		if err := ctrl.DeleteSnapshot(vmCfg.VMX, name); err != nil {
-			deleteErrs = append(deleteErrs, fmt.Errorf("remove orphaned snapshot %q: %w", name, err))
-			continue
+	}
+
+	out := cmd.OutOrStdout()
+	if len(matching) == 0 {
+		_, err := fmt.Fprintf(out, "no orphaned snapshots found for %q\n", vmName)
+		return err
+	}
+
+	// Only lock once there's actually something to delete: a `run` for
+	// this VM holds this same lock for its whole choreography (see
+	// backup.AcquireLock's doc comment), so a snapshot can never be
+	// deleted out from under it. If the lock is held, defer to whoever
+	// holds it rather than fail -- this isn't a cleanup error, just
+	// something to retry later.
+	lock, err := backup.AcquireLock(cfg.Destination, vmCfg.Name)
+	if err != nil {
+		if errors.Is(err, backup.ErrLocked) {
+			_, ferr := fmt.Fprintf(out, "backup for %q may be in progress (lock held); skipping cleanup\n", vmName)
+			return ferr
 		}
+		return fmt.Errorf("acquire cleanup lock for %q: %w", vmName, err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	deleted, delErr := ctrl.DeleteSnapshots(vmCfg.VMX, matching)
+	for _, name := range deleted {
 		if _, err := fmt.Fprintf(out, "removed orphaned snapshot %q from %q\n", name, vmName); err != nil {
 			return err
 		}
 	}
-
-	if len(deleteErrs) > 0 {
-		return fmt.Errorf("cleanup %q: %w", vmName, errors.Join(deleteErrs...))
-	}
-
-	if !found {
-		_, err := fmt.Fprintf(out, "no orphaned snapshots found for %q\n", vmName)
-		return err
+	if delErr != nil {
+		return fmt.Errorf("cleanup %q: %w", vmName, delErr)
 	}
 
 	return nil
