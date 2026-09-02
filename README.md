@@ -18,8 +18,11 @@ sync → copy → merge → archive → checksum), config loading, and the
 wired up to that choreography, `init` is an interactive config bootstrap
 (discovers VMs, prompts for destination/retention, writes config.yaml)
 that doesn't touch the choreography itself, while `status` is still
-scaffolded, returning "not yet implemented", and `cleanup` doesn't exist
-yet. See
+scaffolded, returning "not yet implemented". `cleanup` is implemented —
+it finds and removes any `snapback-<timestamp>` snapshot orphaned by a
+`run` that died mid-choreography, and is serialized against `run` via a
+per-VM lock so the two can never touch the same VM's snapshots at once.
+See
 [`docs/design.md`](docs/design.md) for the full ADR — architecture,
 choreography, config schema, risks, and the open questions still worth
 verifying locally.

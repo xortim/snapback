@@ -74,6 +74,18 @@ func runCleanup(cmd *cobra.Command, deps cleanupDeps, vmName string) error {
 	// deleted out from under it. If the lock is held, defer to whoever
 	// holds it rather than fail -- this isn't a cleanup error, just
 	// something to retry later.
+	//
+	// This still leaves a narrow, benign gap: `matching` above was
+	// computed from ListSnapshots before this lock was acquired, so a
+	// `run` can finish and release the lock in between. If it does, one
+	// of the names in `matching` may already be gone by the time
+	// DeleteSnapshots runs below, and DeleteSnapshots reports that as a
+	// "not found" error for that name rather than success. That's not
+	// data loss -- it's the `run` that raced this cleanup having already
+	// removed the snapshot itself -- but it does surface here as a
+	// nonzero exit rather than a silent no-op. The lock still fully
+	// prevents cleanup from ever deleting a snapshot a live `run` owns;
+	// this only affects how a successful race is reported.
 	lock, err := backup.AcquireLock(cfg.Destination, vmCfg.Name)
 	if err != nil {
 		if errors.Is(err, backup.ErrLocked) {

@@ -56,9 +56,17 @@ func AcquireLock(destination, vmName string) (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
-// Release unlocks and closes the lock file. Safe to call at most once
-// per successful AcquireLock (typically via defer).
+// Release unlocks and closes the lock file. Both current call sites use
+// a single defer, so a second call never happens today -- but Release
+// guards against one anyway: a nil receiver, or a Lock whose file has
+// already been released, is a safe no-op rather than reusing an fd
+// number the OS may have since handed to something unrelated.
 func (l *Lock) Release() error {
-	defer func() { _ = l.f.Close() }()
-	return unix.Flock(int(l.f.Fd()), unix.LOCK_UN)
+	if l == nil || l.f == nil {
+		return nil
+	}
+	f := l.f
+	l.f = nil
+	defer func() { _ = f.Close() }()
+	return unix.Flock(int(f.Fd()), unix.LOCK_UN)
 }
