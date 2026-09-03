@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 
 	"github.com/spf13/cobra"
 
@@ -18,9 +20,11 @@ func configPathForCmd(cmd *cobra.Command) (string, error) {
 // loadConfigForCmd reads the --config flag from cmd and calls loadConfig
 // with it, wrapping any load error with enough context to identify that
 // it came from config loading. Shared by every subcommand that needs the
-// user's config.yaml (run, list, and eventually status), so a wording
-// change (e.g. the friendlier missing-file message tracked in #32) only
-// needs to be made once.
+// user's config.yaml (run, list, status, cleanup), so a wording change
+// only needs to be made once. A missing config file gets a dedicated
+// message pointing at `snapback init` instead of the raw os.PathError --
+// on a fresh machine with no config.yaml yet, that raw error is the very
+// first thing a new user sees and gives no hint of how to fix it.
 func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.Config, error)) (cfg *config.Config, configPath string, err error) {
 	configPath, err = configPathForCmd(cmd)
 	if err != nil {
@@ -29,6 +33,9 @@ func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.
 
 	cfg, err = loadConfig(configPath)
 	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, "", fmt.Errorf("no config file at %s -- run `snapback init` to create one", configPath)
+		}
 		return nil, "", fmt.Errorf("load config: %w", err)
 	}
 	return cfg, configPath, nil
