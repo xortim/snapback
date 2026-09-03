@@ -134,6 +134,14 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 		return err
 	}
 
+	var totalSize int64
+	for _, a := range vmArchives {
+		totalSize += a.Manifest.SizeBytes
+	}
+	if _, err := fmt.Fprintf(out, "total size: %s\n", formatSize(totalSize)); err != nil {
+		return err
+	}
+
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if _, err := fmt.Fprintln(w, "ARCHIVE ID\tTIMESTAMP\tSIZE\tTOOLS STATE\tCOMMENT"); err != nil {
 		return err

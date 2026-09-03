@@ -168,6 +168,31 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 	}
 }
 
+func TestStatusCmd_VMFlag_PrintsTotalSizeAcrossArchives(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) {
+			return []backup.Archive{
+				{ArchiveID: "myvm-2", Manifest: backup.Manifest{VMName: "myvm", SizeBytes: 3072}},
+				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", SizeBytes: 1024}},
+			}, nil
+		},
+	})
+	root.SetArgs([]string{"status", "--vm", "myvm"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(out.String(), "total size: 4.0 KiB") {
+		t.Errorf("stdout = %q, want a \"total size: 4.0 KiB\" line summing both archives", out.String())
+	}
+}
+
 func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	root := newTestRootForStatus(t, statusDeps{
 		loadConfig: func(string) (*config.Config, error) {
@@ -208,12 +233,12 @@ func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	// retention line + table header + one archive row.
-	if len(lines) != 3 {
-		t.Fatalf("stdout had %d lines, want 3 -- an unsanitized embedded newline in Comment would split it into a fourth line: %q", len(lines), out.String())
+	// retention line + total size line + table header + one archive row.
+	if len(lines) != 4 {
+		t.Fatalf("stdout had %d lines, want 4 -- an unsanitized embedded newline in Comment would split it into a fifth line: %q", len(lines), out.String())
 	}
-	if !strings.Contains(lines[2], "line1 line2 line3") {
-		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[2])
+	if !strings.Contains(lines[3], "line1 line2 line3") {
+		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[3])
 	}
 }
 
