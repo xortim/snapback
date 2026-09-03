@@ -45,17 +45,3 @@ func defaultConfigPathFor(warnOut io.Writer) string {
 	}
 	return filepath.Join(home, ".config", "snapback", "config.yaml")
 }
-
-func newStatusCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "status",
-		Short: "Show backup status",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			return errNotImplemented(cmd)
-		},
-	}
-}
-
-func errNotImplemented(cmd *cobra.Command) error {
-	return fmt.Errorf("%s: not yet implemented", cmd.Name())
-}
