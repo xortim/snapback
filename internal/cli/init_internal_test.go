@@ -199,22 +199,99 @@ func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
 	}
 }
 
-func TestInitCmd_InvalidCompressionChoice_Errors(t *testing.T) {
+func TestInitCmd_InvalidCompressionChoice_Reprompts(t *testing.T) {
 	var written []byte
 	var writtenPath string
 	deps := fakeInitDeps(nil, false, &written, &writtenPath)
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// blank name to skip manual VM entry, blank destination, then an
-	// invalid compression choice.
+	// blank name to skip manual VM entry, blank destination, an invalid
+	// compression choice, then a valid one -- followed by defaults for
+	// the remaining prompts (keep_last, keep_daily, keep_weekly, notify).
+	root.SetIn(strings.NewReader("\n\nbogus\ngzip\n\n\n\n\n"))
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
+	}
+	if !strings.Contains(out.String(), `"bogus" is not one of`) {
+		t.Errorf("stdout = %q, want it to explain the invalid choice before re-prompting", out.String())
+	}
+	if !strings.Contains(string(written), "compression: gzip") {
+		t.Errorf("written config = %q, want the retried valid choice", written)
+	}
+}
+
+func TestInitCmd_InvalidRetentionCount_Reprompts(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps(nil, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// blank name, blank destination, blank compression, invalid keep_last,
+	// then a valid one, then defaults for keep_daily/keep_weekly/notify.
+	root.SetIn(strings.NewReader("\n\n\nnotanumber\n3\n\n\n\n"))
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
+	}
+	if !strings.Contains(out.String(), `"notanumber" is not a whole number`) {
+		t.Errorf("stdout = %q, want it to explain the invalid count before re-prompting", out.String())
+	}
+	if !strings.Contains(string(written), "keep_last: 3") {
+		t.Errorf("written config = %q, want the retried valid count", written)
+	}
+}
+
+func TestInitCmd_InvalidYesNoAnswer_Reprompts(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps(nil, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// blank name, blank destination, blank compression, blank retention x3,
+	// invalid notify answer, then a valid one.
+	root.SetIn(strings.NewReader("\n\n\n\n\n\nmaybe\nn\n"))
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
+	}
+	if !strings.Contains(out.String(), `"maybe" is not y/n`) {
+		t.Errorf("stdout = %q, want it to explain the invalid answer before re-prompting", out.String())
+	}
+	if !strings.Contains(string(written), "enabled: false") {
+		t.Errorf("written config = %q, want the retried valid answer", written)
+	}
+}
+
+func TestInitCmd_InvalidChoiceThenEOF_Errors(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps(nil, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// blank name, blank destination, invalid compression, then input runs
+	// out -- the re-prompt itself must still hard-fail on a genuinely
+	// unrecoverable read, not loop forever.
 	root.SetIn(strings.NewReader("\n\nbogus\n"))
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 
 	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "bogus") {
-		t.Fatalf("Execute() error = %v, want an error naming the invalid compression choice", err)
+	if err == nil || !strings.Contains(err.Error(), "read input") {
+		t.Fatalf("Execute() error = %v, want a read-input error once retry input is exhausted", err)
 	}
 }
 
