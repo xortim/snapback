@@ -278,29 +278,44 @@ func (p prompter) promptString(label, defaultVal string) (string, error) {
 	return line, nil
 }
 
+// promptChoice, promptInt, and promptBool re-prompt on invalid input
+// rather than failing the whole init session -- a typo on the last
+// question would otherwise throw away every answer already given, with
+// no partial config written, forcing the user to start over from
+// scratch. The hard-error path stays reserved for promptString's own
+// EOF/read-failure case, a genuinely unrecoverable situation unlike a
+// typo.
 func (p prompter) promptChoice(label, defaultVal string, choices []string) (string, error) {
-	val, err := p.promptString(label, defaultVal)
-	if err != nil {
-		return "", err
-	}
-	for _, c := range choices {
-		if val == c {
-			return val, nil
+	for {
+		val, err := p.promptString(label, defaultVal)
+		if err != nil {
+			return "", err
+		}
+		for _, c := range choices {
+			if val == c {
+				return val, nil
+			}
+		}
+		if _, err := fmt.Fprintf(p.out, "%q is not one of %v, try again\n", val, choices); err != nil {
+			return "", err
 		}
 	}
-	return "", fmt.Errorf("%q is not one of %v", val, choices)
 }
 
 func (p prompter) promptInt(label string, defaultVal int) (int, error) {
-	val, err := p.promptString(label, strconv.Itoa(defaultVal))
-	if err != nil {
-		return 0, err
+	for {
+		val, err := p.promptString(label, strconv.Itoa(defaultVal))
+		if err != nil {
+			return 0, err
+		}
+		n, err := strconv.Atoi(val)
+		if err == nil {
+			return n, nil
+		}
+		if _, err := fmt.Fprintf(p.out, "%q is not a whole number, try again\n", val); err != nil {
+			return 0, err
+		}
 	}
-	n, err := strconv.Atoi(val)
-	if err != nil {
-		return 0, fmt.Errorf("%q is not a whole number", val)
-	}
-	return n, nil
 }
 
 func (p prompter) promptBool(label string, defaultVal bool) (bool, error) {
@@ -308,16 +323,19 @@ func (p prompter) promptBool(label string, defaultVal bool) (bool, error) {
 	if !defaultVal {
 		defaultStr = "n"
 	}
-	val, err := p.promptString(label+" (y/n)", defaultStr)
-	if err != nil {
-		return false, err
-	}
-	switch strings.ToLower(val) {
-	case "y", "yes":
-		return true, nil
-	case "n", "no":
-		return false, nil
-	default:
-		return false, fmt.Errorf("%q is not y/n", val)
+	for {
+		val, err := p.promptString(label+" (y/n)", defaultStr)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(val) {
+		case "y", "yes":
+			return true, nil
+		case "n", "no":
+			return false, nil
+		}
+		if _, err := fmt.Fprintf(p.out, "%q is not y/n, try again\n", val); err != nil {
+			return false, err
+		}
 	}
 }
