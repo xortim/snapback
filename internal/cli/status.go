@@ -83,6 +83,15 @@ func archivesForVM(archives []backup.Archive, vmName string) []backup.Archive {
 	return out
 }
 
+// totalArchiveSize sums SizeBytes across archives.
+func totalArchiveSize(archives []backup.Archive) int64 {
+	var total int64
+	for _, a := range archives {
+		total += a.Manifest.SizeBytes
+	}
+	return total
+}
+
 // runStatusSummary prints one row per configured VM: last backup
 // timestamp, total size across all its archives, and archive count. A VM
 // with no archives yet gets an explicit "no backups yet" row instead of
@@ -100,11 +109,7 @@ func runStatusSummary(cmd *cobra.Command, vms []config.VM, archives []backup.Arc
 		size := "-"
 		if len(vmArchives) > 0 {
 			lastBackup = vmArchives[0].Manifest.Timestamp.Local().Format(time.RFC3339)
-			var totalSize int64
-			for _, a := range vmArchives {
-				totalSize += a.Manifest.SizeBytes
-			}
-			size = formatSize(totalSize)
+			size = formatSize(totalArchiveSize(vmArchives))
 		}
 
 		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\n",
@@ -134,11 +139,7 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 		return err
 	}
 
-	var totalSize int64
-	for _, a := range vmArchives {
-		totalSize += a.Manifest.SizeBytes
-	}
-	if _, err := fmt.Fprintf(out, "total size: %s\n", formatSize(totalSize)); err != nil {
+	if _, err := fmt.Fprintf(out, "total size: %s\n", formatSize(totalArchiveSize(vmArchives))); err != nil {
 		return err
 	}
 
