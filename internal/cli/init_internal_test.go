@@ -84,10 +84,10 @@ func TestInitCmd_WritesConfigFromDiscoveredVMAndDefaults(t *testing.T) {
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// One blank line per prompt, in order: VM selection, destination,
-	// compression, keep_last, keep_daily, keep_weekly, notifications --
-	// every prompt accepts its default.
-	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n"))
+	// One blank line per prompt, in order: VM selection, add-more-manually,
+	// destination, compression, keep_last, keep_daily, keep_weekly,
+	// notifications -- every prompt accepts its default.
+	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n\n"))
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(&bytes.Buffer{})
@@ -106,6 +106,32 @@ func TestInitCmd_WritesConfigFromDiscoveredVMAndDefaults(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "wrote config to /cfg/config.yaml") {
 		t.Errorf("stdout = %q, want a confirmation naming the config path", out.String())
+	}
+}
+
+func TestInitCmd_DiscoveredVMs_CanAlsoAddManually(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// select the discovered VM, opt into manual entry, add "renamed" (a VM
+	// discovery can't see because its bundle was renamed after creation),
+	// blank name to stop manual entry, then defaults for the rest.
+	root.SetIn(strings.NewReader("\n" + "y\n" + "renamed\n/vms/renamed.vmwarevm/renamed.vmx\n\n" + "\n\n\n\n\n\n"))
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	got := string(written)
+	if !strings.Contains(got, "name: dev") {
+		t.Errorf("written config = %q, want the discovered dev VM", got)
+	}
+	if !strings.Contains(got, "name: renamed") || !strings.Contains(got, "vmx: /vms/renamed.vmwarevm/renamed.vmx") {
+		t.Errorf("written config = %q, want the manually-added renamed VM", got)
 	}
 }
 
@@ -187,7 +213,7 @@ func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
-	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n"))
+	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n\n"))
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 

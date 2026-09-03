@@ -231,6 +231,30 @@ func (p prompter) promptVMs(candidates []discoveredVM) ([]config.VM, error) {
 	for i, c := range selected {
 		vms[i] = config.VM{Name: c.Name, VMX: c.VMX}
 	}
+	// Validated here, before offering manual entry, so an invalid
+	// selection (e.g. a duplicate) fails immediately rather than after
+	// reading through the manual-entry prompt too.
+	if err := config.ValidateVMs(vms); err != nil {
+		return nil, fmt.Errorf("invalid VM selection: %w", err)
+	}
+
+	// discoverVMs requires a bundle's .vmx to match the bundle's own name
+	// exactly, so a VM renamed in Finder after creation becomes invisible
+	// to discovery -- offer manual entry even when discovery found
+	// candidates, not only when it found none, so a renamed VM isn't both
+	// undiscoverable and unaddable.
+	addMore, err := p.promptBool("Add another VM manually?", false)
+	if err != nil {
+		return nil, err
+	}
+	if addMore {
+		manual, err := p.promptManualVMs()
+		if err != nil {
+			return nil, err
+		}
+		vms = append(vms, manual...)
+	}
+
 	return vms, nil
 }
 
