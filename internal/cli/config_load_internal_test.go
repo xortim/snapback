@@ -4,6 +4,7 @@ package cli
 
 import (
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -22,6 +23,26 @@ func TestLoadConfigForCmd_WrapsLoaderError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "load config") {
 		t.Errorf("loadConfigForCmd() error = %v, want \"load config\" context", err)
+	}
+}
+
+func TestLoadConfigForCmd_MissingFile_FriendlyMessage(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "/some/missing/config.yaml", "")
+
+	notExist := &fs.PathError{Op: "open", Path: "/some/missing/config.yaml", Err: fs.ErrNotExist}
+	_, _, err := loadConfigForCmd(cmd, func(string) (*config.Config, error) { return nil, notExist })
+	if err == nil {
+		t.Fatal("loadConfigForCmd() error = nil, want a friendly missing-config error")
+	}
+	if !strings.Contains(err.Error(), "/some/missing/config.yaml") {
+		t.Errorf("loadConfigForCmd() error = %q, want it to name the config path", err.Error())
+	}
+	if !strings.Contains(err.Error(), "snapback init") {
+		t.Errorf("loadConfigForCmd() error = %q, want it to point at `snapback init`", err.Error())
+	}
+	if strings.Contains(err.Error(), "no such file or directory") {
+		t.Errorf("loadConfigForCmd() error = %q, want the raw os.PathError text replaced, not appended", err.Error())
 	}
 }
 
