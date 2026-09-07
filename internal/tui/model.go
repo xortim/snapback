@@ -93,11 +93,6 @@ func (m Model) Init() tea.Cmd {
 	return tickCmd()
 }
 
-// View implements tea.Model.
-func (m Model) View() string {
-	return ""
-}
-
 // Update implements tea.Model.
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
