@@ -1,8 +1,26 @@
 # ADR-002: snapback CLI UX — Progress Reporting and Interactive Commands
 
-**Status:** Proposed
-**Date:** 2026-08-23
+**Status:** Accepted
+**Date:** 2026-08-23 (revised 2026-09-07)
 **Deciders:** Tim
+
+## Implementation status (added 2026-09-07)
+
+The `Reporter`/`Event`/`Stage` vocabulary below already exists in
+`internal/progress` exactly as designed, landed as part of phase 1's
+choreography work — `backup.Run` already takes a `progress.Reporter` and
+never imports a rendering package. Two things differ from the original
+text below, both naming/structure only, not decisions to revisit:
+
+- The plain-line renderer is `progress.NewTerminalReporter` (lives in
+  `internal/progress` itself), not a separate `plain` package as
+  originally sketched.
+- `tui.Reporter` and everything bubbletea/lipgloss/bubbles/huh-based
+  does not exist yet — building it is issue #17, sequenced as three
+  independent slices, each its own branch/PR: **`run`'s checklist
+  first** (highest-visibility payoff, the one surface with real
+  animation), then `init`'s `huh` wizard, then `status --vm`'s card
+  drill-down. `restore` is phase 3 and not part of this work.
 
 ## Scope
 
