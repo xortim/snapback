@@ -1,30 +1,30 @@
 package cli
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
-	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/tui"
 )
 
 // initDeps groups init's external dependencies so tests can substitute a
-// fake VM scanner, a config writer that captures its argument, and a
-// fake existing-file check instead of touching the real filesystem or
-// ~/Virtual Machines.
+// fake VM scanner, a fake wizard, a config writer that captures its
+// argument, and a fake existing-file check instead of touching the real
+// filesystem, a real terminal, or requiring a Fusion install.
 type initDeps struct {
 	searchDirs  func() []string
 	discoverVMs func(searchDirs []string) ([]discoveredVM, error)
 	marshal     func(cfg *config.Config) ([]byte, error)
 	writeFile   func(path string, data []byte) error
 	fileExists  func(path string) bool
+	isTerminal  func(w io.Writer) bool
+	runWizard   func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate) (*config.Config, error)
 }
 
 func newInitCmd() *cobra.Command {
@@ -34,6 +34,8 @@ func newInitCmd() *cobra.Command {
 		marshal:     config.Marshal,
 		writeFile:   writeConfigFile,
 		fileExists:  configFileExists,
+		isTerminal:  defaultIsTerminal,
+		runWizard:   tui.RunInitWizard,
 	})
 }
 
@@ -97,16 +99,6 @@ func newInitCmdWithDeps(deps initDeps) *cobra.Command {
 	return cmd
 }
 
-// prompter bundles the stdin/stdout pair every init prompt needs, plus
-// the command's context, so each prompt method below takes only the
-// arguments specific to that prompt instead of repeating (ctx, out, in)
-// on every call.
-type prompter struct {
-	ctx context.Context
-	out io.Writer
-	in  *bufio.Scanner
-}
-
 func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 	configPath, err := configPathForCmd(cmd)
 	if err != nil {
@@ -116,64 +108,27 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", configPath)
 	}
 
-	p := prompter{ctx: cmd.Context(), out: cmd.OutOrStdout(), in: bufio.NewScanner(cmd.InOrStdin())}
-
-	candidates, err := discoverVMsWithContext(p.ctx, deps.discoverVMs, deps.searchDirs())
+	candidates, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, deps.searchDirs())
 	if err != nil {
 		return fmt.Errorf("discover VMs: %w", err)
 	}
-
-	vms, err := p.promptVMs(candidates)
-	if err != nil {
-		return err
-	}
-	if len(vms) == 0 {
-		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: no VMs configured; `snapback run --all` will have nothing to back up"); err != nil {
-			return err
-		}
-	}
-	if err := config.ValidateVMs(vms); err != nil {
-		return fmt.Errorf("invalid VM selection: %w", err)
+	tuiCandidates := make([]tui.VMCandidate, len(candidates))
+	for i, c := range candidates {
+		tuiCandidates[i] = tui.VMCandidate{Name: c.Name, VMX: c.VMX}
 	}
 
-	destination, err := p.promptString("Backup destination", "/Volumes/Backups/snapback")
-	if err != nil {
-		return err
-	}
-	compression, err := p.promptChoice("Compression (zstd/gzip)", "zstd", []string{"zstd", "gzip"})
-	if err != nil {
-		return err
-	}
-	keepLast, err := p.promptInt("Keep last N backups", 5)
-	if err != nil {
-		return err
-	}
-	keepDaily, err := p.promptInt("Keep daily backups for N days", 7)
-	if err != nil {
-		return err
-	}
-	keepWeekly, err := p.promptInt("Keep weekly backups for N weeks", 4)
-	if err != nil {
-		return err
-	}
-	notify, err := p.promptBool("Enable notifications", true)
-	if err != nil {
-		return err
-	}
+	out := cmd.OutOrStdout()
+	in := cmd.InOrStdin()
+	// A real bubbletea program can't read a non-terminal stdin correctly
+	// (a pipe, a redirected file), so accessible mode is used whenever
+	// out isn't a real terminal -- the same rule run.go's isTerminal
+	// check already applies for choosing a renderer, applied here to
+	// choosing a huh.Form mode instead.
+	accessible := deps.isTerminal == nil || !deps.isTerminal(out)
 
-	cfg := &config.Config{
-		Destination: destination,
-		Compression: compression,
-		Retention: config.Retention{
-			KeepLast:   keepLast,
-			KeepDaily:  keepDaily,
-			KeepWeekly: keepWeekly,
-		},
-		VMs:           vms,
-		Notifications: config.Notifications{Enabled: notify},
-	}
-	if err := config.Validate(cfg); err != nil {
-		return fmt.Errorf("built an invalid config: %w", err)
+	cfg, err := deps.runWizard(cmd.Context(), in, out, accessible, tuiCandidates)
+	if err != nil {
+		return err
 	}
 
 	data, err := deps.marshal(cfg)
@@ -184,7 +139,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	_, err = fmt.Fprintf(p.out, "wrote config to %s\n", configPath)
+	_, err = fmt.Fprintf(out, "wrote config to %s\n", configPath)
 	return err
 }
 
@@ -211,200 +166,5 @@ func discoverVMsWithContext(ctx context.Context, scan func([]string) ([]discover
 		return nil, fmt.Errorf("init cancelled: %w", ctx.Err())
 	case r := <-done:
 		return r.vms, r.err
-	}
-}
-
-// promptVMs lists candidates (found by discoverVMs) and asks the user
-// which to include, or -- if none were found -- falls back to prompting
-// for VMs one at a time by name and .vmx path.
-func (p prompter) promptVMs(candidates []discoveredVM) ([]config.VM, error) {
-	if len(candidates) == 0 {
-		if _, err := fmt.Fprintln(p.out, "no VMs found automatically; enter them manually (blank name to stop)"); err != nil {
-			return nil, err
-		}
-		return p.promptManualVMs()
-	}
-
-	if _, err := fmt.Fprintln(p.out, "discovered VMs:"); err != nil {
-		return nil, err
-	}
-	for i, c := range candidates {
-		if _, err := fmt.Fprintf(p.out, "  %d) %s\n", i+1, c.Name); err != nil {
-			return nil, err
-		}
-	}
-
-	selection, err := p.promptString(`Include which VMs? (comma-separated numbers, or "all")`, "all")
-	if err != nil {
-		return nil, err
-	}
-
-	var selected []discoveredVM
-	if strings.EqualFold(selection, "all") {
-		selected = candidates
-	} else {
-		for _, tok := range strings.Split(selection, ",") {
-			tok = strings.TrimSpace(tok)
-			if tok == "" {
-				continue
-			}
-			idx, err := strconv.Atoi(tok)
-			if err != nil || idx < 1 || idx > len(candidates) {
-				return nil, fmt.Errorf("%q is not a valid VM number (1-%d)", tok, len(candidates))
-			}
-			selected = append(selected, candidates[idx-1])
-		}
-	}
-
-	vms := make([]config.VM, len(selected))
-	for i, c := range selected {
-		vms[i] = config.VM{Name: c.Name, VMX: c.VMX}
-	}
-	// Validated here, before offering manual entry, so an invalid
-	// selection (e.g. a duplicate) fails immediately rather than after
-	// reading through the manual-entry prompt too.
-	if err := config.ValidateVMs(vms); err != nil {
-		return nil, fmt.Errorf("invalid VM selection: %w", err)
-	}
-
-	// discoverVMs requires a bundle's .vmx to match the bundle's own name
-	// exactly, so a VM renamed in Finder after creation becomes invisible
-	// to discovery -- offer manual entry even when discovery found
-	// candidates, not only when it found none, so a renamed VM isn't both
-	// undiscoverable and unaddable.
-	addMore, err := p.promptBool("Add another VM manually?", false)
-	if err != nil {
-		return nil, err
-	}
-	if addMore {
-		manual, err := p.promptManualVMs()
-		if err != nil {
-			return nil, err
-		}
-		vms = append(vms, manual...)
-	}
-
-	return vms, nil
-}
-
-func (p prompter) promptManualVMs() ([]config.VM, error) {
-	var vms []config.VM
-	for {
-		name, err := p.promptString("VM name (blank to stop)", "")
-		if err != nil {
-			return nil, err
-		}
-		if name == "" {
-			return vms, nil
-		}
-		vmx, err := p.promptString("  .vmx path for "+name, "")
-		if err != nil {
-			return nil, err
-		}
-		if vmx == "" {
-			return nil, fmt.Errorf("VM %q needs a .vmx path", name)
-		}
-		vms = append(vms, config.VM{Name: name, VMX: vmx})
-	}
-}
-
-// promptString prints label with defaultVal shown, reads one line from
-// p.in, and returns it trimmed, or defaultVal if the line is blank.
-// Returns an error if p.in runs out of input or fails to read -- a
-// truncated interactive session means the resulting config was never
-// actually reviewed by the user, so init treats that as a hard failure
-// rather than silently falling back to defaults.
-func (p prompter) promptString(label, defaultVal string) (string, error) {
-	if _, err := fmt.Fprintf(p.out, "%s [%s]: ", label, defaultVal); err != nil {
-		return "", err
-	}
-
-	// bufio.Scanner.Scan blocks on the underlying read with no way to
-	// interrupt it directly, so it runs in a goroutine and races against
-	// ctx.Done() -- otherwise a SIGINT during a prompt (ctx is canceled
-	// process-wide in cmd/snapback/main.go) would have nothing to notice
-	// it and init would hang until stdin produced a line. The goroutine
-	// leaks past a cancellation, blocked on the read, but the process is
-	// exiting anyway so nothing is around to leak into.
-	scanned := make(chan bool, 1)
-	go func() { scanned <- p.in.Scan() }()
-
-	select {
-	case <-p.ctx.Done():
-		return "", fmt.Errorf("init cancelled: %w", p.ctx.Err())
-	case ok := <-scanned:
-		if !ok {
-			if err := p.in.Err(); err != nil {
-				return "", fmt.Errorf("read input: %w", err)
-			}
-			return "", fmt.Errorf("read input: unexpected end of input")
-		}
-	}
-	line := strings.TrimSpace(p.in.Text())
-	if line == "" {
-		return defaultVal, nil
-	}
-	return line, nil
-}
-
-// promptChoice, promptInt, and promptBool re-prompt on invalid input
-// rather than failing the whole init session -- a typo on the last
-// question would otherwise throw away every answer already given, with
-// no partial config written, forcing the user to start over from
-// scratch. The hard-error path stays reserved for promptString's own
-// EOF/read-failure case, a genuinely unrecoverable situation unlike a
-// typo.
-func (p prompter) promptChoice(label, defaultVal string, choices []string) (string, error) {
-	for {
-		val, err := p.promptString(label, defaultVal)
-		if err != nil {
-			return "", err
-		}
-		for _, c := range choices {
-			if val == c {
-				return val, nil
-			}
-		}
-		if _, err := fmt.Fprintf(p.out, "%q is not one of %v, try again\n", val, choices); err != nil {
-			return "", err
-		}
-	}
-}
-
-func (p prompter) promptInt(label string, defaultVal int) (int, error) {
-	for {
-		val, err := p.promptString(label, strconv.Itoa(defaultVal))
-		if err != nil {
-			return 0, err
-		}
-		n, err := strconv.Atoi(val)
-		if err == nil {
-			return n, nil
-		}
-		if _, err := fmt.Fprintf(p.out, "%q is not a whole number, try again\n", val); err != nil {
-			return 0, err
-		}
-	}
-}
-
-func (p prompter) promptBool(label string, defaultVal bool) (bool, error) {
-	defaultStr := "y"
-	if !defaultVal {
-		defaultStr = "n"
-	}
-	for {
-		val, err := p.promptString(label+" (y/n)", defaultStr)
-		if err != nil {
-			return false, err
-		}
-		switch strings.ToLower(val) {
-		case "y", "yes":
-			return true, nil
-		case "n", "no":
-			return false, nil
-		}
-		if _, err := fmt.Fprintf(p.out, "%q is not y/n, try again\n", val); err != nil {
-			return false, err
-		}
 	}
 }
