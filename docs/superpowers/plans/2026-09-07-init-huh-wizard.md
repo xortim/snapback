@@ -16,6 +16,7 @@
 - **Verified against huh v1.0.0's actual source** (not assumed): `Form.runAccessible` (`form.go:703`) iterates every group's every field unconditionally via `f.selector.Range` — it does **not** consult `Group.WithHide`/`WithHideFunc`. A conditionally-hidden group is skipped in the real interactive path but still prompted in accessible mode. Do not use `WithHideFunc` anywhere in this plan for that reason — the per-VM custom-cron question (Task 5/7) is always asked, gated only by its own `Validate` closure checking the already-answered schedule choice.
 - **Verified against huh v1.0.0's actual source:** `internal/accessibility.PromptString` (and everything built on it — `PromptInt`, `PromptBool`) constructs a **fresh `bufio.Scanner` on every single call**, used for exactly one line before being discarded. A `bufio.Scanner` reads in chunks: on any reader whose one `Read()` call can return more than one line's worth of bytes at once (true of `strings.Reader`, and true of a redirected/piped stdin with several lines already sitting in the pipe buffer when reading starts), that discarded scanner's read-ahead silently drops every line beyond the first before the next field's brand-new scanner ever sees it. Every accessible-mode form this plan builds must wrap its input reader with `lineBufferedReader` (Task 2) — this is a correctness fix for real piped/non-tty `snapback init` invocations, not only a test convenience.
 - `lineBufferedReader` must only ever wrap the reader passed to `huh.Form.WithInput` when `accessible == true`. In the real interactive (non-accessible) path, `WithInput` also sets `tea.WithInput` for the underlying bubbletea program (verified: `form.go`'s `WithInput` does both), so wrapping it there would throttle real terminal key-event reads to one byte at a time and must not happen.
+- **Verified against huh v1.0.0's actual source:** `accessibility.PromptString` (the function every `Input` field's accessible mode runs through) calls the field's `Validate` closure on the *raw scanned line* — a blank line included — and only substitutes the field's pre-set default (`cmp.Or(strings.TrimSpace(input), defaultValue)`) *after* that closure has already accepted it. This is unlike `Select`/`Confirm`, whose own accessible-mode validators (`validInt`/`validBool` in `accessibility.go`) special-case a blank line themselves before ever calling a field's `Validate` closure. Concretely: a bare `Validate(validateWritableDestination)` on the destination `Input` would reject every blank "accept the default" line the wizard's own tests (and any real accessible-mode/piped invocation) rely on, instead of applying the default. Task 3's `acceptBlankInAccessibleMode` wrapper exists specifically to close this gap, and every `Input` field with a non-empty default (destination, the three retention counts) must be wrapped with it, gated on `accessible` so the real interactive path — where a genuinely emptied field has no such default-substitution step — still rejects blank input exactly as before.
 - Run `make lint`, `make test`, and `make build` (not ad-hoc `go vet`/`go build`) before every commit meant to be a checkpoint.
 - No cron-parsing dependency is added. `validateCronExpression` (Task 3) is a 5-field sanity check only — nothing in this codebase parses or executes `config.VM.Schedule` yet (see CLAUDE.md's "Other components" table: launchd wiring is unbuilt), so full cron-grammar validation is out of scope here.
 
@@ -25,8 +26,11 @@
 
 - Create `internal/tui/init_reader.go` — `lineBufferedReader`, the one-byte-at-a-time reader wrapper that works around the accessible-mode scanner bug above.
 - Create `internal/tui/init_reader_test.go`.
-- Create `internal/tui/init_validate.go` — `validateWritableDestination`, `expandHome`, `validateNonNegativeInt`, `validateCronExpression` — pure functions, no huh dependency.
+- Create `internal/tui/init_validate.go` — `validateWritableDestination`, `validateNonNegativeInt`, `validateCronExpression`, `acceptBlankInAccessibleMode` — pure functions, no huh dependency.
 - Create `internal/tui/init_validate_test.go`.
+- Modify `internal/config/expand.go` — export `expandTilde` as `ExpandTilde` (same body, just capitalized and given a doc comment usable outside the package) so `internal/tui` can resolve `~` the same way `config.Load` does, instead of duplicating the logic.
+- Modify `internal/config/config.go` — update its two `expandTilde(...)` call sites to `ExpandTilde(...)`.
+- Modify `internal/config/expand_internal_test.go` — update its calls to the renamed `ExpandTilde`.
 - Create `internal/tui/init_schedule.go` — schedule preset constants/choices, `resolveSchedule`.
 - Create `internal/tui/init_schedule_test.go`.
 - Create `internal/tui/init.go` — `VMCandidate`, wizard defaults, `newForm`/`runForm` helpers, `selectVMs`, `addManualVMs`, `promptCoreSettings`, `promptSchedules`, `reviewAndConfirm`, `RunInitWizard`. Built up across Tasks 5–8.
@@ -187,11 +191,15 @@ git commit -m "fix(tui): work around huh accessible-mode scanner reuse across pr
 ### Task 3: Pure validators
 
 **Files:**
+- Modify: `internal/config/expand.go`
+- Modify: `internal/config/config.go`
+- Modify: `internal/config/expand_internal_test.go`
 - Create: `internal/tui/init_validate.go`
 - Test: `internal/tui/init_validate_test.go`
 
 **Interfaces:**
-- Produces (used by Task 6's `promptCoreSettings` and Task 7's `promptSchedules`): `func validateWritableDestination(path string) error`, `func expandHome(path string) (string, error)`, `func validateNonNegativeInt(s string) error`, `func validateCronExpression(s string) error`.
+- Consumes: `config.ExpandTilde` (this task exports it from `internal/config`).
+- Produces (used by Task 6's `promptCoreSettings` and Task 7's `promptSchedules`): `func validateWritableDestination(path string) error`, `func validateNonNegativeInt(s string) error`, `func validateCronExpression(s string) error`, `func acceptBlankInAccessibleMode(accessible bool, validate func(string) error) func(string) error`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -243,30 +251,6 @@ func TestValidateWritableDestination_UnwritableAncestor_ReturnsError(t *testing.
 	}
 }
 
-func TestExpandHome_TildeSlash_ExpandsToHomeDir(t *testing.T) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skipf("no home directory available: %v", err)
-	}
-	got, err := expandHome("~/backups")
-	if err != nil {
-		t.Fatalf("expandHome() error = %v", err)
-	}
-	if want := filepath.Join(home, "backups"); got != want {
-		t.Errorf("expandHome(%q) = %q, want %q", "~/backups", got, want)
-	}
-}
-
-func TestExpandHome_NoTilde_ReturnsUnchanged(t *testing.T) {
-	got, err := expandHome("/Volumes/Backups")
-	if err != nil {
-		t.Fatalf("expandHome() error = %v", err)
-	}
-	if got != "/Volumes/Backups" {
-		t.Errorf("expandHome() = %q, want it unchanged", got)
-	}
-}
-
 func TestValidateNonNegativeInt(t *testing.T) {
 	tests := []struct {
 		in      string
@@ -298,14 +282,76 @@ func TestValidateCronExpression(t *testing.T) {
 		t.Error("validateCronExpression() error = nil, want an error for only 4 fields")
 	}
 }
+
+func TestAcceptBlankInAccessibleMode_Accessible_BlankPassesUnvalidated(t *testing.T) {
+	wrapped := acceptBlankInAccessibleMode(true, validateWritableDestination)
+	// validateWritableDestination on its own rejects "" (see
+	// TestValidateWritableDestination_Empty_ReturnsError above) -- the
+	// wrapper must short-circuit before ever calling it.
+	if err := wrapped(""); err != nil {
+		t.Errorf("wrapped(\"\") error = %v, want nil in accessible mode", err)
+	}
+	if err := wrapped("   "); err != nil {
+		t.Errorf("wrapped(\"   \") error = %v, want nil (whitespace-only) in accessible mode", err)
+	}
+}
+
+func TestAcceptBlankInAccessibleMode_Accessible_NonBlankStillValidated(t *testing.T) {
+	wrapped := acceptBlankInAccessibleMode(true, validateWritableDestination)
+	err := wrapped("/this/path/almost-certainly/does/not/exist/anywhere")
+	if err == nil {
+		t.Error("wrapped(non-blank) error = nil, want the underlying validator's error to still apply")
+	}
+}
+
+func TestAcceptBlankInAccessibleMode_NotAccessible_BlankStillValidated(t *testing.T) {
+	wrapped := acceptBlankInAccessibleMode(false, validateWritableDestination)
+	if err := wrapped(""); err == nil {
+		t.Error("wrapped(\"\") error = nil, want the underlying validator's rejection to still apply outside accessible mode")
+	}
+}
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `go test ./internal/tui/... -run 'TestValidateWritableDestination|TestExpandHome|TestValidateNonNegativeInt|TestValidateCronExpression' -v`
+Run: `go test ./internal/tui/... -run 'TestValidateWritableDestination|TestValidateNonNegativeInt|TestValidateCronExpression|TestAcceptBlankInAccessibleMode' -v`
 Expected: FAIL — none of these functions exist yet.
 
-- [ ] **Step 3: Write the implementation**
+- [ ] **Step 3: Export `config.ExpandTilde`**
+
+In `internal/config/expand.go`, rename `expandTilde` to `ExpandTilde` and give it a doc comment usable from outside the package:
+
+```go
+// ExpandTilde expands a leading "~" (the current user's home directory
+// alone) or "~/..." prefix in path using os.UserHomeDir. Any other
+// leading-tilde form (e.g. "~otheruser/...") is left untouched -- this
+// package only resolves the current user's home, not arbitrary user
+// lookups. Exported so internal/tui's init wizard can validate a
+// proposed destination the same way Load resolves one already written
+// to config.yaml, without duplicating this logic.
+func ExpandTilde(path string) (string, error) {
+	if path != "~" && !strings.HasPrefix(path, "~/") {
+		return path, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory: %w", err)
+	}
+	if path == "~" {
+		return home, nil
+	}
+	return filepath.Join(home, path[2:]), nil
+}
+```
+
+In `internal/config/config.go`, update both call sites (`Load`'s destination and per-VM `vmx` expansion) from `expandTilde(...)` to `ExpandTilde(...)`.
+
+In `internal/config/expand_internal_test.go`, update every `expandTilde(...)` call to `ExpandTilde(...)` (the test names themselves can stay as-is; only the function calls change).
+
+Run: `go test ./internal/config/... -v`
+Expected: PASS — a pure rename, no behavior change.
+
+- [ ] **Step 4: Write `internal/tui`'s implementation**
 
 Create `internal/tui/init_validate.go`:
 
@@ -318,23 +364,26 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/xortim/snapback/internal/config"
 )
 
 // validateWritableDestination is the huh Validate hook for the
-// destination Input field. It expands a leading "~" and checks that the
-// nearest existing ancestor directory is writable -- it deliberately
-// does not create path itself (via os.MkdirAll): init is only proposing
-// a destination here, not committing to it, and the review screen
-// (reviewAndConfirm) is where the user actually confirms the config
-// before anything is written. internal/cli/init.go's own writeConfigFile
-// is the thing that actually creates directories, once the user has
-// confirmed everything.
+// destination Input field. It expands a leading "~" (via
+// config.ExpandTilde, the same expansion config.Load applies to an
+// already-written config.yaml) and checks that the nearest existing
+// ancestor directory is writable -- it deliberately does not create path
+// itself (via os.MkdirAll): init is only proposing a destination here,
+// not committing to it, and the review screen (reviewAndConfirm) is
+// where the user actually confirms the config before anything is
+// written. internal/cli/init.go's own writeConfigFile is the thing that
+// actually creates directories, once the user has confirmed everything.
 func validateWritableDestination(path string) error {
 	trimmed := strings.TrimSpace(path)
 	if trimmed == "" {
 		return fmt.Errorf("destination must not be empty")
 	}
-	expanded, err := expandHome(trimmed)
+	expanded, err := config.ExpandTilde(trimmed)
 	if err != nil {
 		return err
 	}
@@ -368,27 +417,6 @@ func validateWritableDestination(path string) error {
 	return nil
 }
 
-// expandHome expands a leading "~" or "~/" to the current user's home
-// directory. A small, local duplicate of internal/config's own
-// unexported expandTilde (internal/config/expand.go) -- kept separate
-// rather than exporting that one, since this validates a proposed
-// destination before it's ever written to config.yaml, a different
-// concern from config.Load's own tilde expansion of an already-written
-// file.
-func expandHome(path string) (string, error) {
-	if path != "~" && !strings.HasPrefix(path, "~/") {
-		return path, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", fmt.Errorf("resolve ~: %w", err)
-	}
-	if path == "~" {
-		return home, nil
-	}
-	return filepath.Join(home, path[2:]), nil
-}
-
 // validateNonNegativeInt is the Validate hook for the three retention
 // Input fields (keep_last/keep_daily/keep_weekly). huh's Input only ever
 // binds a string (Value(*string)), so parsing to int happens after the
@@ -418,17 +446,46 @@ func validateCronExpression(s string) error {
 	}
 	return nil
 }
+
+// acceptBlankInAccessibleMode wraps validate so a blank/whitespace-only
+// answer passes immediately when accessible is true, deferring to
+// whatever default huh's accessible-mode PromptString substitutes
+// afterward (cmp.Or(strings.TrimSpace(input), defaultValue), in
+// huh@v1.0.0/internal/accessibility/accessibility.go). This exists
+// because, verified against that same source, PromptString calls a
+// field's Validate closure on the *raw scanned line* -- before that
+// default substitution happens -- unlike Select/Confirm's own internal
+// accessible-mode validators, which special-case a blank line
+// themselves. Without this wrapper, every "type nothing to accept the
+// default" convention this wizard relies on (in both its own tests and
+// real piped/non-tty invocations) would instead fail validation and
+// force a reprompt.
+//
+// Only applied when accessible is true: in the real interactive terminal
+// path there is no equivalent default-substitution step for a genuinely
+// emptied Input field (the field starts pre-filled with the default
+// text, so blank only happens if a user deliberately clears it), so
+// blank must still fail validation there exactly as it did before this
+// wrapper existed.
+func acceptBlankInAccessibleMode(accessible bool, validate func(string) error) func(string) error {
+	return func(s string) error {
+		if accessible && strings.TrimSpace(s) == "" {
+			return nil
+		}
+		return validate(s)
+	}
+}
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `go test ./internal/tui/... -v`
 Expected: PASS for every test so far.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add internal/tui/init_validate.go internal/tui/init_validate_test.go
+git add internal/config/expand.go internal/config/config.go internal/config/expand_internal_test.go internal/tui/init_validate.go internal/tui/init_validate_test.go
 git commit -m "feat(tui): add init wizard field validators"
 ```
 
@@ -828,7 +885,7 @@ git commit -m "feat(tui): add init wizard VM selection and manual entry"
 - Modify: `internal/tui/init_test.go`
 
 **Interfaces:**
-- Consumes: `validateWritableDestination`, `validateNonNegativeInt` (Task 3).
+- Consumes: `validateWritableDestination`, `validateNonNegativeInt`, `acceptBlankInAccessibleMode` (Task 3).
 - Produces (used by Task 8's `RunInitWizard`): `type coreSettings struct{ destination, compression string; keepLast, keepDaily, keepWeekly int; notify bool }`, `func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, accessible bool) (coreSettings, error)`.
 
 - [ ] **Step 1: Write the failing tests**
@@ -991,7 +1048,7 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Backup destination").
-				Validate(validateWritableDestination).
+				Validate(acceptBlankInAccessibleMode(accessible, validateWritableDestination)).
 				Value(&destination),
 		),
 		huh.NewGroup(
@@ -1001,9 +1058,9 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 				Value(&compression),
 		),
 		huh.NewGroup(
-			huh.NewInput().Title("Keep last N backups").Validate(validateNonNegativeInt).Value(&keepLastStr),
-			huh.NewInput().Title("Keep daily backups for N days").Validate(validateNonNegativeInt).Value(&keepDailyStr),
-			huh.NewInput().Title("Keep weekly backups for N weeks").Validate(validateNonNegativeInt).Value(&keepWeeklyStr),
+			huh.NewInput().Title("Keep last N backups").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepLastStr),
+			huh.NewInput().Title("Keep daily backups for N days").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepDailyStr),
+			huh.NewInput().Title("Keep weekly backups for N weeks").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepWeeklyStr),
 		),
 		huh.NewGroup(
 			huh.NewConfirm().Title("Enable notifications").Value(&notify),
@@ -1510,7 +1567,7 @@ Expected: FAIL in `internal/cli/init_internal_test.go` (references the now-delet
 
 - [ ] **Step 3: Rewrite `internal/cli/init_internal_test.go`**
 
-Keep unchanged: `newTestRootForInit`, `TestWriteConfigFile_CreatesParentDirAndWritesContent`, `TestConfigFileExists`, `TestInitCmd_ExistingConfig_WithoutForce_Errors`, `TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging`, `TestInitCmd_DiscoverVMsError_IsWrapped`.
+Keep unchanged (test bodies and assertions): `newTestRootForInit`, `TestWriteConfigFile_CreatesParentDirAndWritesContent`, `TestConfigFileExists`, `TestInitCmd_ExistingConfig_WithoutForce_Errors`. `TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging` and `TestInitCmd_DiscoverVMsError_IsWrapped` keep their existing bodies/assertions too, but their `initDeps{...}` literals need two new fields added now that the struct has grown — see Step 3 below.
 
 Delete (now covered by `internal/tui/init_test.go` instead): `TestInitCmd_WritesConfigFromDiscoveredVMAndDefaults`, `TestInitCmd_DiscoveredVMs_CanAlsoAddManually`, `TestInitCmd_NoDiscoveredVMs_PromptsManualEntry`, `TestInitCmd_DuplicateVMSelection_FailsBeforeRemainingPrompts`, `TestInitCmd_InvalidCompressionChoice_Reprompts`, `TestInitCmd_InvalidRetentionCount_Reprompts`, `TestInitCmd_InvalidYesNoAnswer_Reprompts`, `TestInitCmd_InvalidChoiceThenEOF_Errors` (no longer meaningful: huh's accessible-mode `PromptString` silently falls back to whatever was already scanned on EOF instead of erroring — a real, intentional behavior difference from the old bespoke reader, not something to paper over with a misleading test), `TestInitCmd_ContextCancelled_StopsPromptingInsteadOfHanging` (ctx-cancellation during a blocked accessible-mode read isn't supported by huh — see `runForm`'s doc comment in `internal/tui/init.go`; the real interactive path's cancellation is delegated entirely to huh's own `Form.RunWithContext` and isn't independently re-tested here, the same way this codebase doesn't re-test that `context.WithCancel` itself works).
 
@@ -1783,4 +1840,7 @@ EOF
 - **Spec coverage:** "discover VMs → select which to manage" (Task 5), "destination path → compression choice → retention numbers" (Task 6), "per-VM schedule (presets: nightly/weekly/custom cron)" (Task 7, plus a "none" preset added because nothing consumes the field yet — documented as a deliberate addition, not a gap), "review screen → write config.yaml" (Task 8 + Task 9's actual write). The spec's "no non-TTY fallback" note is honored in spirit — no `--yes`/scripted flag is added; accessible mode still asks every question, just without a bubbletea render, chosen automatically the same way `run.go` already picks its renderer automatically.
 - **Placeholder scan:** none found on re-read; every validator, prompt function, and test has real, complete code.
 - **Type consistency:** `tui.RunInitWizard`'s signature (`func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate) (*config.Config, error)`, defined in Task 8) matches `initDeps.runWizard`'s field type and every test's fake in Task 9 exactly. `VMCandidate{Name, VMX string}` (Task 5) matches `discoveredVM{Name, VMX string}`'s shape, and `internal/cli/init.go`'s conversion loop (Task 9) maps between them field-by-field.
-- **Verified, not assumed:** every huh API call in this plan (`Form.WithAccessible`/`WithInput`/`WithOutput`/`RunWithContext`, `Group.WithHideFunc`'s accessible-mode gap, `Input`/`Select`/`MultiSelect`/`Confirm`/`Note`'s `Value`/`Validate`/`RunAccessible` behavior, `Option.Selected`, `NewOptions`, the accessible-mode default-substitution and exact reprompt wording) was checked directly against huh v1.0.0's downloaded source, not recalled from memory — see the Global Constraints section for the two non-obvious findings (group-hide is ignored in accessible mode; scanner reuse drops input) that shaped this plan's design.
+- **Verified, not assumed:** every huh API call in this plan (`Form.WithAccessible`/`WithInput`/`WithOutput`/`RunWithContext`, `Group.WithHideFunc`'s accessible-mode gap, `Input`/`Select`/`MultiSelect`/`Confirm`/`Note`'s `Value`/`Validate`/`RunAccessible` behavior, `Option.Selected`, `NewOptions`, the accessible-mode default-substitution and exact reprompt wording) was checked directly against huh v1.0.0's downloaded source, not recalled from memory — see the Global Constraints section for the three non-obvious findings (group-hide is ignored in accessible mode; scanner reuse drops input; `Input`'s accessible-mode `Validate` runs before default-substitution, unlike `Select`/`Confirm`) that shaped this plan's design. The third of these was caught by an independent review of an earlier draft of this plan, which traced `accessibility.PromptString`'s call order directly against the same downloaded source; `acceptBlankInAccessibleMode` (Task 3) and its use in Task 6 are the fix.
+- **Consistency fix from the same review:** Task 9's instructions for `TestInitCmd_DiscoverVMsError_IsWrapped`/`TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging` previously said "keep unchanged" and then separately said to add `isTerminal`/`runWizard` fields to their `initDeps{...}` literals — a direct contradiction. Resolved: their bodies/assertions are unchanged, but their `initDeps` literals do need the two new fields (Step 3 is the single source of truth for that).
+- **Duplication considered and rejected:** the same review flagged `internal/tui`'s original `expandHome` as a verbatim duplicate of `internal/config`'s unexported `expandTilde`. Fixed by exporting `config.ExpandTilde` (Task 3) and having `validateWritableDestination` call it directly instead of maintaining a second copy.
+- **Per-task lint cadence, considered and kept as-is:** each task here runs only a targeted `go test`/`go build`, with the full `make lint`/`make test`/`make build` deferred to Task 10 — this mirrors `docs/superpowers/plans/2026-09-07-run-tui-renderer.md`'s established convention exactly, not a gap unique to this plan. Not changed.
