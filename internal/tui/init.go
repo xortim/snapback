@@ -8,6 +8,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -37,19 +38,34 @@ func newForm(in io.Reader, out io.Writer, accessible bool, groups ...*huh.Group)
 	return form.WithInput(in)
 }
 
-// runForm runs f, translating both a real ctx cancellation (ctrl+c
-// propagated via huh's own tea.WithContext, in the real interactive
-// path) and huh's own abort signal into the same "init cancelled: %w"
-// wording internal/cli's other commands use. Accessible-mode forms don't
-// support mid-read cancellation the same way (huh's runAccessible takes
-// no context -- verified by reading huh@v1.0.0/form.go) -- acceptable
+// runForm runs f, wrapping the error as "init cancelled: %w" only when
+// the cause is an actual ctx cancellation (ctrl+c propagated via huh's
+// own tea.WithContext, in the real interactive path) or huh's own
+// user-abort signal; any other failure (a genuine huh/bubbletea error)
+// is reported as "interactive prompt failed: %w" instead of being
+// mislabeled as a cancellation. Accessible-mode forms don't support
+// mid-read cancellation the same way (huh's runAccessible takes no
+// context -- verified by reading huh@v1.0.0/form.go) -- acceptable
 // since accessible mode's real-world use is piped/scripted input, not an
 // interactive user waiting to press ctrl+c.
 func runForm(ctx context.Context, f *huh.Form) error {
-	if err := f.RunWithContext(ctx); err != nil {
+	err := f.RunWithContext(ctx)
+	if err == nil {
+		return nil
+	}
+	if isCancellation(ctx, err) {
 		return fmt.Errorf("init cancelled: %w", err)
 	}
-	return nil
+	return fmt.Errorf("interactive prompt failed: %w", err)
+}
+
+// isCancellation reports whether err represents an actual cancellation
+// -- ctx already carrying an error (the caller's own context was
+// canceled or timed out) or huh's own user-abort signal (ctrl+c inside
+// a real interactive form) -- as opposed to some other huh/bubbletea
+// failure that happens to surface through the same RunWithContext call.
+func isCancellation(ctx context.Context, err error) bool {
+	return ctx.Err() != nil || errors.Is(err, huh.ErrUserAborted)
 }
 
 // selectVMs asks which discovered candidates to include (if any were

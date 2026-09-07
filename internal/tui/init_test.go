@@ -3,8 +3,12 @@ package tui
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/charmbracelet/huh"
 )
 
 func TestSelectVMs_AcceptsDefaultSelection_AllDiscovered(t *testing.T) {
@@ -77,5 +81,33 @@ func TestSelectVMs_ManualEntry_RejectsBlankName(t *testing.T) {
 	}
 	if len(vms) != 1 || vms[0].Name != "devbox" {
 		t.Errorf("selectVMs() = %+v, want one retried devbox entry", vms)
+	}
+}
+
+func TestIsCancellation_CanceledContext_ReturnsTrue(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if !isCancellation(ctx, errors.New("boom")) {
+		t.Error("isCancellation() = false, want true for a canceled ctx regardless of err")
+	}
+}
+
+func TestIsCancellation_UserAbortedError_ReturnsTrue(t *testing.T) {
+	if !isCancellation(context.Background(), huh.ErrUserAborted) {
+		t.Error("isCancellation() = false, want true for huh.ErrUserAborted")
+	}
+}
+
+func TestIsCancellation_WrappedUserAbortedError_ReturnsTrue(t *testing.T) {
+	wrapped := fmt.Errorf("form run: %w", huh.ErrUserAborted)
+	if !isCancellation(context.Background(), wrapped) {
+		t.Error("isCancellation() = false, want true for a wrapped huh.ErrUserAborted")
+	}
+}
+
+func TestIsCancellation_OtherError_LiveContext_ReturnsFalse(t *testing.T) {
+	if isCancellation(context.Background(), errors.New("boom")) {
+		t.Error("isCancellation() = true, want false for an unrelated error on a live context")
 	}
 }
