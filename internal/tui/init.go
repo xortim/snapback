@@ -192,6 +192,43 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 	return append(vms, manual...), nil
 }
 
+// promptSchedules asks a schedule preset for each VM in vms, in order,
+// mutating vms[i].Schedule in place. The custom-cron question is always
+// asked (see resolveSchedule's doc comment for why), gated only by its
+// own Validate closure checking the choice already made in the same
+// VM's prior group.
+func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM) error {
+	for i := range vms {
+		choice := scheduleChoiceNone
+		var custom string
+
+		form := newForm(in, out, accessible,
+			huh.NewGroup(
+				huh.NewSelect[string]().
+					Title(fmt.Sprintf("Schedule for %s", vms[i].Name)).
+					Options(huh.NewOptions(scheduleChoices...)...).
+					Value(&choice),
+			),
+			huh.NewGroup(
+				huh.NewInput().
+					Title("Custom cron expression (only used if 'custom' was chosen above)").
+					Validate(func(s string) error {
+						if choice != scheduleChoiceCustom {
+							return nil
+						}
+						return validateCronExpression(s)
+					}).
+					Value(&custom),
+			),
+		)
+		if err := runForm(ctx, form); err != nil {
+			return err
+		}
+		vms[i].Schedule = resolveSchedule(choice, custom)
+	}
+	return nil
+}
+
 // addManualVMs loops "add a VM manually?" (Confirm) followed, if yes, by
 // a name+.vmx-path pair, until the user declines. firstDefaultYes
 // defaults the very first iteration's Confirm to true -- used when
