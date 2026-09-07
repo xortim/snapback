@@ -269,3 +269,88 @@ func addManualVMs(ctx context.Context, in io.Reader, out io.Writer, accessible b
 		vms = append(vms, config.VM{Name: name, VMX: vmx})
 	}
 }
+
+// reviewAndConfirm shows cfg rendered exactly as config.Marshal would
+// write it (so the review is guaranteed accurate, not a hand-maintained
+// summary that can drift from what actually gets written) and asks for
+// confirmation before RunInitWizard returns it to the caller.
+func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessible bool, cfg *config.Config) (bool, error) {
+	rendered, err := config.Marshal(cfg)
+	if err != nil {
+		return false, fmt.Errorf("render config for review: %w", err)
+	}
+
+	confirmed := true
+	form := newForm(in, out, accessible,
+		huh.NewGroup(
+			huh.NewNote().
+				Title("Review").
+				Description(string(rendered)),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Write this config?").
+				Value(&confirmed),
+		),
+	)
+	if err := runForm(ctx, form); err != nil {
+		return false, err
+	}
+	return confirmed, nil
+}
+
+// RunInitWizard drives the interactive `snapback init` flow: select
+// which discovered VMs to include (plus manual entry), core settings
+// (destination/compression/retention/notifications), a schedule preset
+// per included VM, then a review screen showing the exact YAML that
+// will be written before writing anything. It returns the built,
+// already config.Validate'd Config; internal/cli/init.go still owns
+// marshaling and writing it to disk.
+//
+// accessible forces huh's plain sequential-prompt mode instead of a real
+// bubbletea render -- internal/cli/init.go sets this from the same TTY
+// check run.go already uses, since a real bubbletea program can't read a
+// non-terminal stdin (a pipe, a test's strings.Reader) correctly. It's
+// also how this package's own tests drive the wizard deterministically.
+func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate) (*config.Config, error) {
+	vms, err := selectVMs(ctx, in, out, accessible, candidates)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.ValidateVMs(vms); err != nil {
+		return nil, fmt.Errorf("invalid VM selection: %w", err)
+	}
+
+	settings, err := promptCoreSettings(ctx, in, out, accessible)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := promptSchedules(ctx, in, out, accessible, vms); err != nil {
+		return nil, err
+	}
+
+	cfg := &config.Config{
+		Destination: settings.destination,
+		Compression: settings.compression,
+		Retention: config.Retention{
+			KeepLast:   settings.keepLast,
+			KeepDaily:  settings.keepDaily,
+			KeepWeekly: settings.keepWeekly,
+		},
+		VMs:           vms,
+		Notifications: config.Notifications{Enabled: settings.notify},
+	}
+	if err := config.Validate(cfg); err != nil {
+		return nil, fmt.Errorf("built an invalid config: %w", err)
+	}
+
+	ok, err := reviewAndConfirm(ctx, in, out, accessible, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, errors.New("init aborted: config not written")
+	}
+	return cfg, nil
+}

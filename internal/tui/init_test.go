@@ -288,3 +288,93 @@ func TestPromptSchedules_MultipleVMs_AskedInOrder(t *testing.T) {
 		t.Errorf("output = %q, want both VM names named in their own prompt", out.String())
 	}
 }
+
+func TestReviewAndConfirm_ShowsRenderedYAMLAndDefaultsToWrite(t *testing.T) {
+	cfg := &config.Config{
+		Destination: "/dest",
+		Compression: "zstd",
+		VMs:         []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}},
+	}
+	in := strings.NewReader("\n") // accept the default "write this config? [Y/n]"
+	var out bytes.Buffer
+
+	ok, err := reviewAndConfirm(context.Background(), in, &out, true, cfg)
+	if err != nil {
+		t.Fatalf("reviewAndConfirm() error = %v", err)
+	}
+	if !ok {
+		t.Error("reviewAndConfirm() = false, want true (the default)")
+	}
+	if !strings.Contains(out.String(), "name: dev") || !strings.Contains(out.String(), "destination: /dest") {
+		t.Errorf("output = %q, want the rendered config YAML shown for review", out.String())
+	}
+}
+
+func TestReviewAndConfirm_Declined_ReturnsFalse(t *testing.T) {
+	cfg := &config.Config{Destination: "/dest", Compression: "zstd", VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}}
+	in := strings.NewReader("n\n")
+	var out bytes.Buffer
+
+	ok, err := reviewAndConfirm(context.Background(), in, &out, true, cfg)
+	if err != nil {
+		t.Fatalf("reviewAndConfirm() error = %v", err)
+	}
+	if ok {
+		t.Error("reviewAndConfirm() = true, want false")
+	}
+}
+
+func TestRunInitWizard_EndToEnd_DiscoveredVMWithDefaults(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	// VM select: "0" (confirm default selection), "n" (decline manual).
+	// Core settings: 6 blanks (destination/compression/keep_last/
+	// keep_daily/keep_weekly/notify), all defaults.
+	// Schedule (1 VM): 2 blanks (choice=none, custom=unused).
+	// Review: blank (accept default "write? [Y/n]" = yes).
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n\n")
+	var out bytes.Buffer
+
+	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	if err != nil {
+		t.Fatalf("RunInitWizard() error = %v", err)
+	}
+	if len(cfg.VMs) != 1 || cfg.VMs[0].Name != "dev" {
+		t.Fatalf("cfg.VMs = %+v, want the one discovered VM", cfg.VMs)
+	}
+	if cfg.Destination != defaultDestination || cfg.Compression != defaultCompression {
+		t.Errorf("cfg = %+v, want default destination/compression", cfg)
+	}
+	if cfg.Retention.KeepLast != defaultKeepLast {
+		t.Errorf("cfg.Retention.KeepLast = %d, want %d", cfg.Retention.KeepLast, defaultKeepLast)
+	}
+	if !cfg.Notifications.Enabled {
+		t.Error("cfg.Notifications.Enabled = false, want true (the default)")
+	}
+}
+
+func TestRunInitWizard_DuplicateVMName_FailsBeforeCoreSettings(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	// confirm default selection, then manually add another VM also named
+	// "dev" -- config.ValidateVMs must catch this before promptCoreSettings
+	// ever runs (there's no more scripted input for it to consume, so if
+	// validation were deferred this test would hang/fail on a different
+	// error).
+	in := strings.NewReader("0\ny\ndev\n/vms/other.vmx\nn\n")
+	var out bytes.Buffer
+
+	_, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("RunInitWizard() error = %v, want it to mention \"invalid VM selection\" and \"duplicate\"", err)
+	}
+}
+
+func TestRunInitWizard_DeclinedAtReview_ReturnsAbortedError(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\nn\n")
+	var out bytes.Buffer
+
+	_, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	if err == nil || !strings.Contains(err.Error(), "aborted") {
+		t.Fatalf("RunInitWizard() error = %v, want an \"aborted\" error", err)
+	}
+}
