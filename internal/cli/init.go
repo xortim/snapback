@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -96,10 +97,12 @@ func newInitCmdWithDeps(deps initDeps) *cobra.Command {
 	return cmd
 }
 
-// prompter bundles the stdin/stdout pair every init prompt needs, so each
-// prompt method below takes only the arguments specific to that prompt
-// instead of repeating the (out, in) pair on every call.
+// prompter bundles the stdin/stdout pair every init prompt needs, plus
+// the command's context, so each prompt method below takes only the
+// arguments specific to that prompt instead of repeating (ctx, out, in)
+// on every call.
 type prompter struct {
+	ctx context.Context
 	out io.Writer
 	in  *bufio.Scanner
 }
@@ -113,7 +116,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", configPath)
 	}
 
-	p := prompter{out: cmd.OutOrStdout(), in: bufio.NewScanner(cmd.InOrStdin())}
+	p := prompter{ctx: cmd.Context(), out: cmd.OutOrStdout(), in: bufio.NewScanner(cmd.InOrStdin())}
 
 	candidates, err := deps.discoverVMs(deps.searchDirs())
 	if err != nil {
@@ -289,11 +292,27 @@ func (p prompter) promptString(label, defaultVal string) (string, error) {
 	if _, err := fmt.Fprintf(p.out, "%s [%s]: ", label, defaultVal); err != nil {
 		return "", err
 	}
-	if !p.in.Scan() {
-		if err := p.in.Err(); err != nil {
-			return "", fmt.Errorf("read input: %w", err)
+
+	// bufio.Scanner.Scan blocks on the underlying read with no way to
+	// interrupt it directly, so it runs in a goroutine and races against
+	// ctx.Done() -- otherwise a SIGINT during a prompt (ctx is canceled
+	// process-wide in cmd/snapback/main.go) would have nothing to notice
+	// it and init would hang until stdin produced a line. The goroutine
+	// leaks past a cancellation, blocked on the read, but the process is
+	// exiting anyway so nothing is around to leak into.
+	scanned := make(chan bool, 1)
+	go func() { scanned <- p.in.Scan() }()
+
+	select {
+	case <-p.ctx.Done():
+		return "", fmt.Errorf("init cancelled: %w", p.ctx.Err())
+	case ok := <-scanned:
+		if !ok {
+			if err := p.in.Err(); err != nil {
+				return "", fmt.Errorf("read input: %w", err)
+			}
+			return "", fmt.Errorf("read input: unexpected end of input")
 		}
-		return "", fmt.Errorf("read input: unexpected end of input")
 	}
 	line := strings.TrimSpace(p.in.Text())
 	if line == "" {

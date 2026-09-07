@@ -2,10 +2,13 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -318,6 +321,31 @@ func TestInitCmd_InvalidChoiceThenEOF_Errors(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "read input") {
 		t.Fatalf("Execute() error = %v, want a read-input error once retry input is exhausted", err)
+	}
+}
+
+func TestInitCmd_ContextCancelled_StopsPromptingInsteadOfHanging(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	deps := fakeInitDeps(nil, false, &written, &writtenPath)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	// A pipe with no writer blocks Scan() forever, standing in for a real
+	// terminal that's still waiting on the user -- the only way this test
+	// completes is if cancelling ctx actually interrupts the prompt.
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pw.Close() })
+	root.SetIn(pr)
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+
+	err := root.ExecuteContext(ctx)
+	if err == nil || !strings.Contains(err.Error(), "init cancelled") {
+		t.Fatalf("ExecuteContext() error = %v, want an \"init cancelled\" error instead of hanging", err)
 	}
 }
 

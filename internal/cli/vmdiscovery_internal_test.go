@@ -74,9 +74,12 @@ func TestDefaultVMSearchDirs_IncludesVirtualMachinesUnderHome(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dirs := defaultVMSearchDirs()
-	want := filepath.Join(home, "Virtual Machines")
-	if len(dirs) != 1 || dirs[0] != want {
-		t.Errorf("defaultVMSearchDirs() = %v, want [%q]", dirs, want)
+	want := []string{
+		filepath.Join(home, "Virtual Machines.localized"),
+		filepath.Join(home, "Virtual Machines"),
+	}
+	if len(dirs) != len(want) || dirs[0] != want[0] || dirs[1] != want[1] {
+		t.Errorf("defaultVMSearchDirs() = %v, want %v", dirs, want)
 	}
 }
 

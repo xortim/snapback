@@ -72,15 +72,24 @@ func isVMBundleDir(dir string, entry os.DirEntry) bool {
 }
 
 // defaultVMSearchDirs returns the directories discoverVMs scans by
-// default: just ~/Virtual Machines, Fusion's standard location (see
-// docs/design.md's config reference example). Returns nil (not an
-// error) if the home directory can't be determined -- init falls back to
-// manual VM entry in that case, same as when the directory doesn't
-// exist.
+// default. Fusion's installer names the folder "Virtual Machines" on
+// disk, but on a Mac with an OS language other than English it's
+// "Virtual Machines.localized" -- the ".localized" suffix tells Finder
+// to substitute a display name from a Localizable.strings file inside
+// it rather than showing the literal directory name, so a
+// non-English-localized install of Fusion is invisible to a scan that
+// only checks the unsuffixed path. Both are checked; discoverVMs already
+// skips whichever one doesn't exist, so this is harmless when only one
+// is present. Returns nil (not an error) if the home directory can't be
+// determined -- init falls back to manual VM entry in that case, same as
+// when neither directory exists.
 func defaultVMSearchDirs() []string {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil
 	}
-	return []string{filepath.Join(home, "Virtual Machines")}
+	return []string{
+		filepath.Join(home, "Virtual Machines.localized"),
+		filepath.Join(home, "Virtual Machines"),
+	}
 }
