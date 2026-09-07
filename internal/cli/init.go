@@ -118,7 +118,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 
 	p := prompter{ctx: cmd.Context(), out: cmd.OutOrStdout(), in: bufio.NewScanner(cmd.InOrStdin())}
 
-	candidates, err := deps.discoverVMs(deps.searchDirs())
+	candidates, err := discoverVMsWithContext(p.ctx, deps.discoverVMs, deps.searchDirs())
 	if err != nil {
 		return fmt.Errorf("discover VMs: %w", err)
 	}
@@ -186,6 +186,32 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 
 	_, err = fmt.Fprintf(p.out, "wrote config to %s\n", configPath)
 	return err
+}
+
+// discoverVMsWithContext runs scan (deps.discoverVMs) in a goroutine and
+// races it against ctx.Done() -- like promptString's read below, a
+// filesystem scan has no way to be interrupted directly, so without this
+// a SIGINT arriving while ~/Virtual Machines sits on a stalled network or
+// external volume would have nothing to notice it, leaving init hung
+// despite ctx already being canceled. The goroutine leaks past
+// cancellation, blocked on the scan, but the process is exiting anyway.
+func discoverVMsWithContext(ctx context.Context, scan func([]string) ([]discoveredVM, error), searchDirs []string) ([]discoveredVM, error) {
+	type result struct {
+		vms []discoveredVM
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		vms, err := scan(searchDirs)
+		done <- result{vms, err}
+	}()
+
+	select {
+	case <-ctx.Done():
+		return nil, fmt.Errorf("init cancelled: %w", ctx.Err())
+	case r := <-done:
+		return r.vms, r.err
+	}
 }
 
 // promptVMs lists candidates (found by discoverVMs) and asks the user

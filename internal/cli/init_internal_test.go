@@ -349,6 +349,35 @@ func TestInitCmd_ContextCancelled_StopsPromptingInsteadOfHanging(t *testing.T) {
 	}
 }
 
+func TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging(t *testing.T) {
+	blockUntilCancelled := make(chan struct{})
+	deps := initDeps{
+		searchDirs: func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) {
+			<-blockUntilCancelled // stands in for a scan stalled on an unresponsive volume
+			return nil, nil
+		},
+		marshal:    config.Marshal,
+		writeFile:  func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
+		fileExists: func(string) bool { return false },
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(20*time.Millisecond, cancel)
+	t.Cleanup(func() { close(blockUntilCancelled) })
+
+	err := root.ExecuteContext(ctx)
+	if err == nil || !strings.Contains(err.Error(), "init cancelled") {
+		t.Fatalf("ExecuteContext() error = %v, want an \"init cancelled\" error instead of hanging on a stalled scan", err)
+	}
+}
+
 func TestInitCmd_DiscoverVMsError_IsWrapped(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },

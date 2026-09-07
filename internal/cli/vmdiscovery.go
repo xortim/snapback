@@ -29,9 +29,15 @@ type discoveredVM struct {
 // every Fusion-created VM follows. A directory that doesn't exist is
 // skipped, not an error: ~/Virtual Machines may not exist if Fusion was
 // never run or VMs live elsewhere, and the caller can still fall back to
-// manual entry. Results are sorted by Name for deterministic output.
+// manual entry. searchDirs can legitimately overlap in content (see
+// defaultVMSearchDirs) so a bundle name already found in an earlier
+// directory is skipped rather than added again -- otherwise the same VM
+// showing up under both directories produces two candidates with
+// identical names, which config.ValidateVMs then rejects outright.
+// Results are sorted by Name for deterministic output.
 func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 	var found []discoveredVM
+	seen := make(map[string]bool)
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -45,12 +51,16 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 				continue
 			}
 			name := entry.Name()[:len(entry.Name())-len(vmBundleExt)]
+			if seen[name] {
+				continue
+			}
 			vmx := filepath.Join(dir, entry.Name(), name+".vmx")
 			info, err := os.Stat(vmx)
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
 			found = append(found, discoveredVM{Name: name, VMX: vmx})
+			seen[name] = true
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Name < found[j].Name })

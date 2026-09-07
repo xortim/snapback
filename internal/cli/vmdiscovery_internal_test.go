@@ -121,6 +121,20 @@ func TestDiscoverVMs_MatchesCaseInsensitiveSuffix(t *testing.T) {
 	}
 }
 
+func TestDiscoverVMs_DedupesBundleFoundInMultipleDirs(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	makeVMwareVM(t, dirA, "myvm", true)
+	makeVMwareVM(t, dirB, "myvm", true)
+
+	got, err := discoverVMs([]string{dirA, dirB})
+	if err != nil {
+		t.Fatalf("discoverVMs returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "myvm" || got[0].VMX != filepath.Join(dirA, "myvm.vmwarevm", "myvm.vmx") {
+		t.Errorf("discoverVMs = %+v, want one entry for myvm from the first dir (dirA takes precedence, no duplicate name for config.ValidateVMs to reject)", got)
+	}
+}
+
 func TestDiscoverVMs_SkipsVMXThatIsADirectory(t *testing.T) {
 	dir := t.TempDir()
 	bundle := filepath.Join(dir, "myvm.vmwarevm")
