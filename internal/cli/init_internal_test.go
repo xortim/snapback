@@ -227,15 +227,16 @@ func TestInitCmd_PassesDiscoveredCandidatesToWizard(t *testing.T) {
 	}
 }
 
-func TestInitCmd_IsTerminalTrue_UsesNonAccessibleMode(t *testing.T) {
+func TestInitCmd_BothStdoutAndStdinAreTerminals_UsesNonAccessibleMode(t *testing.T) {
 	var gotAccessible bool
 	deps := initDeps{
-		searchDirs:  func() []string { return nil },
-		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
-		marshal:     config.Marshal,
-		writeFile:   func(string, []byte) error { return nil },
-		fileExists:  func(string) bool { return false },
-		isTerminal:  func(io.Writer) bool { return true },
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return true },
+		isTerminalIn: func(io.Reader) bool { return true },
 		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
 			gotAccessible = accessible
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
@@ -252,7 +253,78 @@ func TestInitCmd_IsTerminalTrue_UsesNonAccessibleMode(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if gotAccessible {
-		t.Error("accessible = true, want false when isTerminal reports a real terminal")
+		t.Error("accessible = true, want false when both stdout and stdin are real terminals")
+	}
+}
+
+// TestInitCmd_StdoutTerminalButStdinNot_UsesAccessibleMode reproduces
+// finding 3 from the whole-branch review: `snapback init < answers.txt`
+// run at an actual terminal has a real tty stdout but a redirected-file
+// stdin. The old check only tested stdout, so this combination wrongly
+// kept the rich interactive bubbletea path, which can't read a
+// non-terminal stdin correctly.
+func TestInitCmd_StdoutTerminalButStdinNot_UsesAccessibleMode(t *testing.T) {
+	var gotAccessible bool
+	deps := initDeps{
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return true },
+		isTerminalIn: func(io.Reader) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+			gotAccessible = accessible
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !gotAccessible {
+		t.Error("accessible = false, want true when stdin is not a real terminal, even though stdout is")
+	}
+}
+
+// TestInitCmd_NilIsTerminalIn_TreatedAsNotATerminal mirrors the existing
+// nil-isTerminal behavior: a nil isTerminalIn (as every other existing
+// initDeps literal in this file now has, by omission) must behave like
+// "not a terminal", keeping every one of those tests on the accessible
+// path they were already exercising.
+func TestInitCmd_NilIsTerminalIn_TreatedAsNotATerminal(t *testing.T) {
+	var gotAccessible bool
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { return nil },
+		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return true },
+		// isTerminalIn intentionally left nil.
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+			gotAccessible = accessible
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !gotAccessible {
+		t.Error("accessible = false, want true when isTerminalIn is nil")
 	}
 }
 
@@ -298,6 +370,38 @@ func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
 	}
 	if written == nil {
 		t.Errorf("writeFile was not called, want --force to allow the write")
+	}
+}
+
+// TestInitCmd_ZeroVMConfig_WarnsButStillWrites reproduces finding 4 from
+// the whole-branch review: the old hand-rolled prompter printed a
+// warning to stderr when the user finished with zero VMs configured
+// (config.ValidateVMs doesn't reject an empty list, so this was never a
+// hard failure -- just a warning that a resulting `snapback run --all`
+// would have nothing to do). That warning was dropped when the wizard
+// rewrite happened.
+func TestInitCmd_ZeroVMConfig_WarnsButStillWrites(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{Destination: "/dest", Compression: "zstd"} // no VMs
+	deps := fakeInitDeps(nil, false, &written, &writtenPath, cfg)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want the zero-VM config to still be written", err)
+	}
+	wantWarning := "warning: no VMs configured; `snapback run --all` will have nothing to back up"
+	if !strings.Contains(errOut.String(), wantWarning) {
+		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), wantWarning)
+	}
+	if written == nil {
+		t.Error("writeFile was not called, want the zero-VM config to still be written (this is a warning, not a hard failure)")
 	}
 }
 

@@ -18,24 +18,26 @@ import (
 // argument, and a fake existing-file check instead of touching the real
 // filesystem, a real terminal, or requiring a Fusion install.
 type initDeps struct {
-	searchDirs  func() []string
-	discoverVMs func(searchDirs []string) ([]discoveredVM, error)
-	marshal     func(cfg *config.Config) ([]byte, error)
-	writeFile   func(path string, data []byte) error
-	fileExists  func(path string) bool
-	isTerminal  func(w io.Writer) bool
-	runWizard   func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate) (*config.Config, error)
+	searchDirs   func() []string
+	discoverVMs  func(searchDirs []string) ([]discoveredVM, error)
+	marshal      func(cfg *config.Config) ([]byte, error)
+	writeFile    func(path string, data []byte) error
+	fileExists   func(path string) bool
+	isTerminal   func(w io.Writer) bool
+	isTerminalIn func(r io.Reader) bool
+	runWizard    func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate) (*config.Config, error)
 }
 
 func newInitCmd() *cobra.Command {
 	return newInitCmdWithDeps(initDeps{
-		searchDirs:  defaultVMSearchDirs,
-		discoverVMs: discoverVMs,
-		marshal:     config.Marshal,
-		writeFile:   writeConfigFile,
-		fileExists:  configFileExists,
-		isTerminal:  defaultIsTerminal,
-		runWizard:   tui.RunInitWizard,
+		searchDirs:   defaultVMSearchDirs,
+		discoverVMs:  discoverVMs,
+		marshal:      config.Marshal,
+		writeFile:    writeConfigFile,
+		fileExists:   configFileExists,
+		isTerminal:   defaultIsTerminal,
+		isTerminalIn: defaultIsTerminalIn,
+		runWizard:    tui.RunInitWizard,
 	})
 }
 
@@ -119,16 +121,27 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 
 	out := cmd.OutOrStdout()
 	in := cmd.InOrStdin()
-	// A real bubbletea program can't read a non-terminal stdin correctly
-	// (a pipe, a redirected file), so accessible mode is used whenever
-	// out isn't a real terminal -- the same rule run.go's isTerminal
-	// check already applies for choosing a renderer, applied here to
-	// choosing a huh.Form mode instead.
-	accessible := deps.isTerminal == nil || !deps.isTerminal(out)
+	// A real bubbletea program needs a real terminal on *both* ends: it
+	// renders into stdout, and it reads raw keypresses from stdin. Either
+	// one not being a real terminal -- a redirected/piped stdout, or (the
+	// case the naive out-only check used to miss) `snapback init <
+	// answers.txt` run at an actual terminal, where stdout is a real tty
+	// but stdin is a redirected file -- means the rich interactive path
+	// can't work, so accessible mode is the safe default whenever either
+	// check comes back false or unset.
+	outIsTerminal := deps.isTerminal != nil && deps.isTerminal(out)
+	inIsTerminal := deps.isTerminalIn != nil && deps.isTerminalIn(in)
+	accessible := !outIsTerminal || !inIsTerminal
 
 	cfg, err := deps.runWizard(cmd.Context(), in, out, accessible, tuiCandidates)
 	if err != nil {
 		return err
+	}
+
+	if len(cfg.VMs) == 0 {
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), "warning: no VMs configured; `snapback run --all` will have nothing to back up"); err != nil {
+			return err
+		}
 	}
 
 	data, err := deps.marshal(cfg)
