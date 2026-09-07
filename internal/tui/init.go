@@ -27,31 +27,57 @@ type VMCandidate struct {
 	VMX  string
 }
 
-// newForm builds a huh.Form wired to in/out. In accessible mode, in is
-// wrapped in lineBufferedReader (see init_reader.go's doc comment for
-// why); in real interactive mode it's passed through unwrapped, since
-// WithInput also configures the underlying bubbletea program's raw
-// terminal input, which must not be throttled.
-func newForm(in io.Reader, out io.Writer, accessible bool, groups ...*huh.Group) *huh.Form {
-	form := huh.NewForm(groups...).WithOutput(out)
-	if accessible {
-		return form.WithAccessible(true).WithInput(lineBufferedReader{r: in})
-	}
-	return form.WithInput(in)
-}
+// errUnexpectedEOF is what runForm returns when an accessible-mode
+// form's input reader hits EOF at any point during the run -- see
+// lineBufferedReader's doc comment for why huh itself can't surface
+// this. Wording matches the hand-rolled prompter this wizard replaced,
+// which treated a truncated interactive session as a hard failure on
+// the rationale that the resulting config was never actually reviewed
+// by the user.
+var errUnexpectedEOF = errors.New("read input: unexpected end of input")
 
-// runForm runs f, wrapping the error as "init cancelled: %w" only when
-// the cause is an actual ctx cancellation (ctrl+c propagated via huh's
-// own tea.WithContext, in the real interactive path) or huh's own
-// user-abort signal; any other failure (a genuine huh/bubbletea error)
-// is reported as "interactive prompt failed: %w" instead of being
+// runForm builds a huh.Form from groups wired to in/out and runs it,
+// combining what used to be two separate helpers (newForm+runForm) so
+// the EOF check below can't be skipped by a call site that builds a form
+// without it.
+//
+// In accessible mode, in is wrapped in a *lineBufferedReader (see
+// init_reader.go's doc comment for why the pointer matters) and, once
+// the form finishes, checked for EOF: if the underlying reader ran out
+// at any point during the run, the form is treated as failed regardless
+// of what huh itself returned (nil, in that case -- huh's accessible
+// mode has no way to report EOF, so anything left at a default/
+// unvalidated value because the reader ran dry was never actually
+// reviewed by the user). In real interactive mode in is passed through
+// unwrapped, since WithInput also configures the underlying bubbletea
+// program's raw terminal input, which must not be throttled, and real
+// terminal input doesn't hit this failure mode.
+//
+// Any other failure is wrapped as "init cancelled: %w" only when the
+// cause is an actual ctx cancellation (ctrl+c propagated via huh's own
+// tea.WithContext, in the real interactive path) or huh's own
+// user-abort signal; anything else (a genuine huh/bubbletea error) is
+// reported as "interactive prompt failed: %w" instead of being
 // mislabeled as a cancellation. Accessible-mode forms don't support
 // mid-read cancellation the same way (huh's runAccessible takes no
 // context -- verified by reading huh@v1.0.0/form.go) -- acceptable
 // since accessible mode's real-world use is piped/scripted input, not an
 // interactive user waiting to press ctrl+c.
-func runForm(ctx context.Context, f *huh.Form) error {
-	err := f.RunWithContext(ctx)
+func runForm(ctx context.Context, in io.Reader, out io.Writer, accessible bool, groups ...*huh.Group) error {
+	form := huh.NewForm(groups...).WithOutput(out)
+
+	var reader *lineBufferedReader
+	if accessible {
+		reader = &lineBufferedReader{r: in}
+		form = form.WithAccessible(true).WithInput(reader)
+	} else {
+		form = form.WithInput(in)
+	}
+
+	err := form.RunWithContext(ctx)
+	if reader != nil && reader.sawEOF {
+		return errUnexpectedEOF
+	}
 	if err == nil {
 		return nil
 	}
@@ -104,7 +130,7 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 	keepWeeklyStr := strconv.Itoa(defaultKeepWeekly)
 	notify := true
 
-	form := newForm(in, out, accessible,
+	err := runForm(ctx, in, out, accessible,
 		huh.NewGroup(
 			huh.NewInput().
 				Title("Backup destination").
@@ -126,12 +152,18 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 			huh.NewConfirm().Title("Enable notifications").Value(&notify),
 		),
 	)
-	if err := runForm(ctx, form); err != nil {
+	if err != nil {
 		return coreSettings{}, err
 	}
 
-	// Each string is already validated by validateNonNegativeInt above,
-	// so the parse here cannot fail.
+	// Each string is guaranteed valid at this point -- not merely by
+	// validateNonNegativeInt in isolation, but by that validator combined
+	// with runForm's EOF guard above: huh only lets a field's value stand
+	// once its own Validate closure has returned nil for it, and runForm
+	// turns any input EOF (which is how an invalid value with no
+	// subsequent correction would otherwise reach here unvalidated -- see
+	// lineBufferedReader's doc comment) into errUnexpectedEOF before this
+	// line is ever reached. So this parse cannot fail.
 	keepLast, _ := strconv.Atoi(strings.TrimSpace(keepLastStr))
 	keepDaily, _ := strconv.Atoi(strings.TrimSpace(keepDailyStr))
 	keepWeekly, _ := strconv.Atoi(strings.TrimSpace(keepWeeklyStr))
@@ -161,7 +193,7 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 			options[i] = huh.NewOption(c.Name, c.Name).Selected(true)
 		}
 		var selected []string
-		form := newForm(in, out, accessible,
+		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
 				huh.NewMultiSelect[string]().
 					Title("Select VMs to back up").
@@ -169,7 +201,7 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 					Value(&selected),
 			),
 		)
-		if err := runForm(ctx, form); err != nil {
+		if err != nil {
 			return nil, err
 		}
 
@@ -202,7 +234,7 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 		choice := scheduleChoiceNone
 		var custom string
 
-		form := newForm(in, out, accessible,
+		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
 				huh.NewSelect[string]().
 					Title(fmt.Sprintf("Schedule for %s", vms[i].Name)).
@@ -221,7 +253,7 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 					Value(&custom),
 			),
 		)
-		if err := runForm(ctx, form); err != nil {
+		if err != nil {
 			return err
 		}
 		vms[i].Schedule = resolveSchedule(choice, custom)
@@ -242,14 +274,14 @@ func addManualVMs(ctx context.Context, in io.Reader, out io.Writer, accessible b
 		addMore := firstDefaultYes && first
 		first = false
 
-		confirmForm := newForm(in, out, accessible,
+		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
 				huh.NewConfirm().
 					Title("Add a VM manually?").
 					Value(&addMore),
 			),
 		)
-		if err := runForm(ctx, confirmForm); err != nil {
+		if err != nil {
 			return nil, err
 		}
 		if !addMore {
@@ -257,13 +289,13 @@ func addManualVMs(ctx context.Context, in io.Reader, out io.Writer, accessible b
 		}
 
 		var name, vmx string
-		entryForm := newForm(in, out, accessible,
+		err = runForm(ctx, in, out, accessible,
 			huh.NewGroup(
 				huh.NewInput().Title("VM name").Validate(huh.ValidateNotEmpty()).Value(&name),
 				huh.NewInput().Title("Path to .vmx file").Validate(huh.ValidateNotEmpty()).Value(&vmx),
 			),
 		)
-		if err := runForm(ctx, entryForm); err != nil {
+		if err != nil {
 			return nil, err
 		}
 		vms = append(vms, config.VM{Name: name, VMX: vmx})
@@ -281,7 +313,7 @@ func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessib
 	}
 
 	confirmed := true
-	form := newForm(in, out, accessible,
+	err = runForm(ctx, in, out, accessible,
 		huh.NewGroup(
 			huh.NewNote().
 				Title("Review").
@@ -293,7 +325,7 @@ func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessib
 				Value(&confirmed),
 		),
 	)
-	if err := runForm(ctx, form); err != nil {
+	if err != nil {
 		return false, err
 	}
 	return confirmed, nil

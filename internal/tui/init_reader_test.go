@@ -2,6 +2,8 @@ package tui
 
 import (
 	"bufio"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -17,7 +19,7 @@ import (
 // scanner and lost -- the next fresh scanner sees only EOF. This test
 // fails without the fix and passes with it.
 func TestLineBufferedReader_PreservesLaterLinesAcrossSeparateScanners(t *testing.T) {
-	r := lineBufferedReader{r: strings.NewReader("first\nsecond\nthird\n")}
+	r := &lineBufferedReader{r: strings.NewReader("first\nsecond\nthird\n")}
 
 	for _, want := range []string{"first", "second", "third"} {
 		scanner := bufio.NewScanner(r)
@@ -31,7 +33,7 @@ func TestLineBufferedReader_PreservesLaterLinesAcrossSeparateScanners(t *testing
 }
 
 func TestLineBufferedReader_ReadsAtMostOneByte(t *testing.T) {
-	r := lineBufferedReader{r: strings.NewReader("abc")}
+	r := &lineBufferedReader{r: strings.NewReader("abc")}
 	buf := make([]byte, 8)
 
 	n, err := r.Read(buf)
@@ -43,5 +45,34 @@ func TestLineBufferedReader_ReadsAtMostOneByte(t *testing.T) {
 	}
 	if buf[0] != 'a' {
 		t.Errorf("Read() byte = %q, want %q", buf[0], 'a')
+	}
+}
+
+// TestLineBufferedReader_SetsSawEOFOnEOF reproduces the root cause behind
+// findings 1 and 2 of the whole-branch review: huh's accessible-mode
+// prompts have no way to report reaching EOF, so without tracking it
+// ourselves at this layer, a truncated or completely empty input reader
+// would silently leave every remaining field at its default/last-attempted
+// value instead of surfacing an error.
+func TestLineBufferedReader_SetsSawEOFOnEOF(t *testing.T) {
+	r := &lineBufferedReader{r: strings.NewReader("")}
+
+	n, err := r.Read(make([]byte, 1))
+	if n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("Read() = (%d, %v), want (0, io.EOF)", n, err)
+	}
+	if !r.sawEOF {
+		t.Error("sawEOF = false, want true after Read returned io.EOF")
+	}
+}
+
+func TestLineBufferedReader_SawEOFFalseWithoutEOF(t *testing.T) {
+	r := &lineBufferedReader{r: strings.NewReader("a")}
+
+	if _, err := r.Read(make([]byte, 1)); err != nil {
+		t.Fatalf("Read() error = %v", err)
+	}
+	if r.sawEOF {
+		t.Error("sawEOF = true, want false: the reader hasn't hit EOF yet")
 	}
 }

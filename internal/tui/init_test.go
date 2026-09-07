@@ -166,6 +166,21 @@ func TestPromptCoreSettings_InvalidNotifyAnswer_Reprompts(t *testing.T) {
 	}
 }
 
+// TestPromptCoreSettings_InvalidRetentionThenEOF_ReturnsError reproduces
+// finding 2 from the whole-branch review: an invalid retention count
+// with no corrected answer following it (input runs out instead) must
+// not silently reach strconv.Atoi as an unvalidated string -- it must
+// surface as an error.
+func TestPromptCoreSettings_InvalidRetentionThenEOF_ReturnsError(t *testing.T) {
+	in := strings.NewReader("\n\nnotanumber\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err == nil {
+		t.Fatalf("promptCoreSettings() = %+v, err = nil, want an error for an invalid value followed by EOF", got)
+	}
+}
+
 func TestPromptCoreSettings_UnwritableDestination_Reprompts(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o500); err != nil {
@@ -365,6 +380,38 @@ func TestRunInitWizard_DuplicateVMName_FailsBeforeCoreSettings(t *testing.T) {
 	_, err := RunInitWizard(context.Background(), in, &out, true, candidates)
 	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("RunInitWizard() error = %v, want it to mention \"invalid VM selection\" and \"duplicate\"", err)
+	}
+}
+
+// TestRunInitWizard_EmptyReader_ReturnsError reproduces finding 1 from
+// the whole-branch review: the reviewer verified empirically that
+// RunInitWizard fed a completely empty io.Reader returned a fully
+// populated *config.Config with err == nil, including the final "write
+// this config?" Confirm silently defaulting to true, even though the
+// user never saw or confirmed a single prompt. A truncated (here,
+// entirely absent) interactive session must be a hard failure instead.
+func TestRunInitWizard_EmptyReader_ReturnsError(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	in := strings.NewReader("")
+	var out bytes.Buffer
+
+	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	if err == nil {
+		t.Fatalf("RunInitWizard() = %+v, err = nil, want an error for a completely empty reader", cfg)
+	}
+	if cfg != nil {
+		t.Errorf("RunInitWizard() cfg = %+v, want nil alongside the error", cfg)
+	}
+}
+
+func TestSelectVMs_EmptyReader_ReturnsError(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	in := strings.NewReader("")
+	var out bytes.Buffer
+
+	vms, err := selectVMs(context.Background(), in, &out, true, candidates)
+	if err == nil {
+		t.Fatalf("selectVMs() = %+v, err = nil, want an error for a completely empty reader", vms)
 	}
 }
 
