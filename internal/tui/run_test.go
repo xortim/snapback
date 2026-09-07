@@ -2,9 +2,11 @@ package tui
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -49,5 +51,56 @@ func TestRunInteractive_Failure_ReturnsError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "✗ merging") {
 		t.Errorf("output = %q, want merging marked failed", out.String())
+	}
+}
+
+// TestRunInteractive_ProgramQuitsBeforeResult_ReturnsError covers the case
+// where bubbletea's Program.Run() returns via its own internal QuitMsg
+// handling before Model.Update ever processes a resultMsg -- e.g. what
+// happens internally on a real SIGTERM (see handleSignals in bubbletea's
+// tea.go, which pushes a bare QuitMsg for any signal other than SIGINT).
+// eventLoop handles a QuitMsg by returning the model exactly as it stood
+// (here: zero value, finished == false) without calling Update at all, so
+// m.result/m.err are both nil -- the bug being fixed is RunInteractive
+// blindly returning that as (nil, nil), which looks like success.
+//
+// Reproducing a real SIGTERM from a test is racy (it can arrive before
+// bubbletea's own signal.Notify has registered, which would kill the whole
+// test process under the default disposition). tea.WithFilter is
+// bubbletea's public hook for intercepting every message before it's
+// processed; forcing the very first message the program receives to a
+// QuitMsg drives the exact same eventLoop bypass deterministically,
+// without depending on OS signal timing.
+func TestRunInteractive_ProgramQuitsBeforeResult_ReturnsError(t *testing.T) {
+	var out bytes.Buffer
+
+	ctx, backupCancel := context.WithCancel(context.Background())
+	defer backupCancel()
+	backupDone := make(chan struct{})
+
+	backupFn := func(r progress.Reporter) (*backup.Result, error) {
+		<-ctx.Done() // blocks until RunInteractive's cancel() call (below) unblocks it
+		close(backupDone)
+		return nil, ctx.Err()
+	}
+
+	cancel := func() { backupCancel() }
+
+	quitEarly := func(_ tea.Model, _ tea.Msg) tea.Msg {
+		return tea.QuitMsg{}
+	}
+
+	got, err := RunInteractive(&out, "myvm", cancel, backupFn, tea.WithInput(strings.NewReader("")), tea.WithFilter(quitEarly))
+	if err == nil {
+		t.Fatal("RunInteractive() error = nil, want a non-nil error for a run that quit before the backup finished")
+	}
+	if got != nil {
+		t.Errorf("RunInteractive() result = %v, want nil", got)
+	}
+
+	select {
+	case <-backupDone:
+	case <-time.After(time.Second):
+		t.Error("backupFn was never unblocked -- RunInteractive should call cancel() before returning for an unfinished run")
 	}
 }

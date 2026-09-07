@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 
@@ -37,6 +38,20 @@ func RunInteractive(out io.Writer, vmName string, cancel context.CancelFunc, bac
 	m, ok := finalModel.(Model)
 	if !ok {
 		return nil, fmt.Errorf("unexpected model type %T from bubbletea program", finalModel)
+	}
+	if !m.finished {
+		// program.Run() can return here via bubbletea's own internal
+		// SIGINT/SIGTERM handling (its QuitMsg path) without Update ever
+		// having processed a resultMsg -- e.g. an external `kill -TERM` or
+		// stdin not being a TTY. In that case m.result/m.err are both still
+		// nil, and blindly returning them would look exactly like success
+		// to the caller (internal/cli's runVM), silently skipping the
+		// orphaned-snapshot warning for a backup that never actually
+		// finished. Signal the in-flight backupFn goroutine to stop
+		// (best-effort -- it may already be past the point where
+		// cancellation helps) and report a definite failure instead.
+		cancel()
+		return nil, errors.New("interactive run ended before the backup finished")
 	}
 	return m.result, m.err
 }

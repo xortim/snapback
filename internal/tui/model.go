@@ -45,9 +45,8 @@ type stageRow struct {
 	message string
 }
 
-// Model is a bubbletea model rendering one run's progress. Exported so
-// internal/cli/run.go's tests can reference it if needed, though normal
-// callers only interact with it via RunInteractive.
+// Model is a bubbletea model rendering one run's progress. Normal callers
+// only interact with it via RunInteractive.
 type Model struct {
 	vmName     string
 	cancel     context.CancelFunc

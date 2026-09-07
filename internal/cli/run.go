@@ -114,6 +114,12 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 		}
 		_, err := deps.runInteractive(out, vmName, cancel, backupFn)
 		if err != nil {
+			// The TUI already rendered its own "error: <err>" line before
+			// returning here, so silence cobra's own default error print --
+			// without this, a failed interactive run shows the same error
+			// twice. This doesn't affect the exit code: cmd/snapback/main.go
+			// only checks whether err != nil.
+			cmd.SilenceErrors = true
 			warnIfMaybeOrphaned(cmd, vmName, err)
 			return err
 		}

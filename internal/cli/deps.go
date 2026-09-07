@@ -10,10 +10,7 @@ import (
 // vmCmdDeps groups the external dependencies shared by every subcommand
 // that operates on a single named VM (run, cleanup): a config loader and
 // a vm.Controller factory, both swappable in tests for a fake instead of
-// touching the real filesystem or requiring a Fusion install. run.go and
-// cleanup.go each keep their own name for this (runDeps, cleanupDeps) as
-// type aliases below -- same shape, so the struct and its default/flag
-// plumbing live here once instead of twice.
+// touching the real filesystem or requiring a Fusion install.
 type vmCmdDeps struct {
 	loadConfig    func(path string) (*config.Config, error)
 	newController func() (vm.Controller, error)

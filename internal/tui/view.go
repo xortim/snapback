@@ -23,9 +23,9 @@ var (
 	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
 	pendingStyle = lipgloss.NewStyle().Faint(true)
 	noticeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
-
-	barWidth = 40
 )
+
+const barWidth = 40
 
 // View implements tea.Model.
 func (m Model) View() string {

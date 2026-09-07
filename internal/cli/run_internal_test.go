@@ -322,6 +322,23 @@ func TestRunCmd_NilIsTerminal_UsesPlainOutput(t *testing.T) {
 	}
 }
 
+func TestDefaultIsTerminal_NonFileWriter_ReturnsFalse(t *testing.T) {
+	if defaultIsTerminal(&bytes.Buffer{}) {
+		t.Error("defaultIsTerminal(*bytes.Buffer) = true, want false")
+	}
+}
+
+func TestDefaultIsTerminal_RegularFile_ReturnsFalse(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "not-a-tty")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if defaultIsTerminal(f) {
+		t.Error("defaultIsTerminal(regular *os.File) = true, want false")
+	}
+}
+
 func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 	vmxPath := writeVMBundle(t)
 	fake := vm.NewFakeVMController()
