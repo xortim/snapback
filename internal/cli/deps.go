@@ -19,10 +19,11 @@ type vmCmdDeps struct {
 	newController func() (vm.Controller, error)
 }
 
-// runDeps and cleanupDeps are aliases (not distinct types), so existing
-// call sites and tests can keep referring to a command-specific name
-// without duplicating vmCmdDeps's fields.
-type runDeps = vmCmdDeps
+// cleanupDeps is an alias (not a distinct type) for vmCmdDeps -- cleanup
+// needs exactly vmCmdDeps's shape and nothing more. runDeps used to be
+// the same alias, but run.go now needs extra fields (isTerminal,
+// runInteractive) that cleanup has no use for, so runDeps is its own
+// struct defined in run.go.
 type cleanupDeps = vmCmdDeps
 
 // defaultVMCmdDeps returns the real, production dependencies: config.Load
