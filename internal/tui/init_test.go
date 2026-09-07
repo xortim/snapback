@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -81,6 +83,110 @@ func TestSelectVMs_ManualEntry_RejectsBlankName(t *testing.T) {
 	}
 	if len(vms) != 1 || vms[0].Name != "devbox" {
 		t.Errorf("selectVMs() = %+v, want one retried devbox entry", vms)
+	}
+}
+
+func TestPromptCoreSettings_AcceptsAllDefaults(t *testing.T) {
+	// One blank line per field, in order: destination, compression,
+	// keep_last, keep_daily, keep_weekly, notifications.
+	in := strings.NewReader("\n\n\n\n\n\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	want := coreSettings{
+		destination: defaultDestination,
+		compression: defaultCompression,
+		keepLast:    defaultKeepLast,
+		keepDaily:   defaultKeepDaily,
+		keepWeekly:  defaultKeepWeekly,
+		notify:      true,
+	}
+	if got != want {
+		t.Errorf("promptCoreSettings() = %+v, want %+v", got, want)
+	}
+}
+
+func TestPromptCoreSettings_InvalidCompressionChoice_Reprompts(t *testing.T) {
+	// destination blank, compression: a non-numeric answer (Select's
+	// accessible mode only accepts a number) then "2" (gzip is the
+	// second option), then defaults for the rest.
+	in := strings.NewReader("\nbogus\n2\n\n\n\n\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	if got.compression != "gzip" {
+		t.Errorf("compression = %q, want %q", got.compression, "gzip")
+	}
+	if !strings.Contains(out.String(), "Invalid: must be a number between") {
+		t.Errorf("output = %q, want a reprompt explaining the invalid choice", out.String())
+	}
+}
+
+func TestPromptCoreSettings_InvalidRetentionCount_Reprompts(t *testing.T) {
+	// destination blank, compression blank, keep_last: invalid then "3",
+	// then defaults for keep_daily/keep_weekly/notifications.
+	in := strings.NewReader("\n\nnotanumber\n3\n\n\n\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	if got.keepLast != 3 {
+		t.Errorf("keepLast = %d, want 3", got.keepLast)
+	}
+	if !strings.Contains(out.String(), `"notanumber" is not a whole number`) {
+		t.Errorf("output = %q, want a reprompt explaining the invalid count", out.String())
+	}
+}
+
+func TestPromptCoreSettings_InvalidNotifyAnswer_Reprompts(t *testing.T) {
+	// destination/compression/retention x3 blank, notify: invalid then
+	// "n".
+	in := strings.NewReader("\n\n\n\n\nmaybe\nn\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	if got.notify {
+		t.Error("notify = true, want false (the retried answer)")
+	}
+	if !strings.Contains(out.String(), "invalid input") {
+		t.Errorf("output = %q, want a reprompt explaining the invalid answer", out.String())
+	}
+}
+
+func TestPromptCoreSettings_UnwritableDestination_Reprompts(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	if os.Getuid() == 0 {
+		t.Skip("running as root: permission bits don't block writes")
+	}
+
+	writable := t.TempDir()
+	in := strings.NewReader(filepath.Join(dir, "backups") + "\n" + filepath.Join(writable, "backups") + "\n\n\n\n\n\n")
+	var out bytes.Buffer
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	if got.destination != filepath.Join(writable, "backups") {
+		t.Errorf("destination = %q, want the retried writable path", got.destination)
+	}
+	if !strings.Contains(out.String(), "not writable") {
+		t.Errorf("output = %q, want a reprompt explaining the unwritable destination", out.String())
 	}
 }
 

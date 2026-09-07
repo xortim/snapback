@@ -11,6 +11,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strconv"
+	"strings"
 
 	"github.com/charmbracelet/huh"
 
@@ -66,6 +68,82 @@ func runForm(ctx context.Context, f *huh.Form) error {
 // failure that happens to surface through the same RunWithContext call.
 func isCancellation(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, huh.ErrUserAborted)
+}
+
+// Defaults match internal/cli/init.go's old plain prompter, kept
+// identical so a fresh `snapback init` proposes the same values as
+// before this rewrite.
+const (
+	defaultDestination = "/Volumes/Backups/snapback"
+	defaultCompression = "zstd"
+	defaultKeepLast    = 5
+	defaultKeepDaily   = 7
+	defaultKeepWeekly  = 4
+)
+
+type coreSettings struct {
+	destination string
+	compression string
+	keepLast    int
+	keepDaily   int
+	keepWeekly  int
+	notify      bool
+}
+
+// promptCoreSettings asks destination, compression, the three retention
+// counts, and whether to enable notifications -- one huh.Form of four
+// groups, matching docs/superpowers/specs/2026-08-23-cli-ux-design.md's
+// "destination path → compression choice → retention numbers" (plus the
+// pre-existing notifications toggle, part of config.Config before this
+// rewrite and kept here rather than dropped).
+func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, accessible bool) (coreSettings, error) {
+	destination := defaultDestination
+	compression := defaultCompression
+	keepLastStr := strconv.Itoa(defaultKeepLast)
+	keepDailyStr := strconv.Itoa(defaultKeepDaily)
+	keepWeeklyStr := strconv.Itoa(defaultKeepWeekly)
+	notify := true
+
+	form := newForm(in, out, accessible,
+		huh.NewGroup(
+			huh.NewInput().
+				Title("Backup destination").
+				Validate(acceptBlankInAccessibleMode(accessible, validateWritableDestination)).
+				Value(&destination),
+		),
+		huh.NewGroup(
+			huh.NewSelect[string]().
+				Title("Compression").
+				Options(huh.NewOption("zstd", "zstd"), huh.NewOption("gzip", "gzip")).
+				Value(&compression),
+		),
+		huh.NewGroup(
+			huh.NewInput().Title("Keep last N backups").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepLastStr),
+			huh.NewInput().Title("Keep daily backups for N days").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepDailyStr),
+			huh.NewInput().Title("Keep weekly backups for N weeks").Validate(acceptBlankInAccessibleMode(accessible, validateNonNegativeInt)).Value(&keepWeeklyStr),
+		),
+		huh.NewGroup(
+			huh.NewConfirm().Title("Enable notifications").Value(&notify),
+		),
+	)
+	if err := runForm(ctx, form); err != nil {
+		return coreSettings{}, err
+	}
+
+	// Each string is already validated by validateNonNegativeInt above,
+	// so the parse here cannot fail.
+	keepLast, _ := strconv.Atoi(strings.TrimSpace(keepLastStr))
+	keepDaily, _ := strconv.Atoi(strings.TrimSpace(keepDailyStr))
+	keepWeekly, _ := strconv.Atoi(strings.TrimSpace(keepWeeklyStr))
+
+	return coreSettings{
+		destination: destination,
+		compression: compression,
+		keepLast:    keepLast,
+		keepDaily:   keepDaily,
+		keepWeekly:  keepWeekly,
+		notify:      notify,
+	}, nil
 }
 
 // selectVMs asks which discovered candidates to include (if any were
