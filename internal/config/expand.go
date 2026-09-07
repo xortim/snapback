@@ -7,12 +7,14 @@ import (
 	"strings"
 )
 
-// expandTilde expands a leading "~" (the current user's home directory
+// ExpandTilde expands a leading "~" (the current user's home directory
 // alone) or "~/..." prefix in path using os.UserHomeDir. Any other
 // leading-tilde form (e.g. "~otheruser/...") is left untouched -- this
 // package only resolves the current user's home, not arbitrary user
-// lookups.
-func expandTilde(path string) (string, error) {
+// lookups. Exported so internal/tui's init wizard can validate a
+// proposed destination the same way Load resolves one already written
+// to config.yaml, without duplicating this logic.
+func ExpandTilde(path string) (string, error) {
 	if path != "~" && !strings.HasPrefix(path, "~/") {
 		return path, nil
 	}
