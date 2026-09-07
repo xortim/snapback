@@ -229,7 +229,7 @@ func (p prompter) promptVMs(candidates []discoveredVM) ([]config.VM, error) {
 		return nil, err
 	}
 	for i, c := range candidates {
-		if _, err := fmt.Fprintf(p.out, "  %d) %s (%s)\n", i+1, c.Name, c.VMX); err != nil {
+		if _, err := fmt.Fprintf(p.out, "  %d) %s\n", i+1, c.Name); err != nil {
 			return nil, err
 		}
 	}
