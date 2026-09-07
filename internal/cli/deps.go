@@ -10,19 +10,17 @@ import (
 // vmCmdDeps groups the external dependencies shared by every subcommand
 // that operates on a single named VM (run, cleanup): a config loader and
 // a vm.Controller factory, both swappable in tests for a fake instead of
-// touching the real filesystem or requiring a Fusion install. run.go and
-// cleanup.go each keep their own name for this (runDeps, cleanupDeps) as
-// type aliases below -- same shape, so the struct and its default/flag
-// plumbing live here once instead of twice.
+// touching the real filesystem or requiring a Fusion install.
 type vmCmdDeps struct {
 	loadConfig    func(path string) (*config.Config, error)
 	newController func() (vm.Controller, error)
 }
 
-// runDeps and cleanupDeps are aliases (not distinct types), so existing
-// call sites and tests can keep referring to a command-specific name
-// without duplicating vmCmdDeps's fields.
-type runDeps = vmCmdDeps
+// cleanupDeps is an alias (not a distinct type) for vmCmdDeps -- cleanup
+// needs exactly vmCmdDeps's shape and nothing more. runDeps used to be
+// the same alias, but run.go now needs extra fields (isTerminal,
+// runInteractive) that cleanup has no use for, so runDeps is its own
+// struct defined in run.go.
 type cleanupDeps = vmCmdDeps
 
 // defaultVMCmdDeps returns the real, production dependencies: config.Load

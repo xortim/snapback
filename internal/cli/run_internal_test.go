@@ -5,7 +5,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +15,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -214,6 +219,161 @@ func TestRunCmd_HappyPath_PrintsArchivePath(t *testing.T) {
 	}
 	if errOut.Len() != 0 {
 		t.Errorf("stderr = %q, want empty on success", errOut.String())
+	}
+}
+
+func TestRunCmd_InteractiveTerminal_UsesRunInteractiveAndSkipsPlainPrint(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	var calledWithVMName string
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{
+				Destination: t.TempDir(),
+				Compression: "gzip",
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+		isTerminal:    func(io.Writer) bool { return true },
+		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
+			calledWithVMName = vmName
+			return backupFn(progress.NoOpReporter{})
+		},
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if calledWithVMName != "myvm" {
+		t.Errorf("runInteractive called with vmName = %q, want %q", calledWithVMName, "myvm")
+	}
+	if strings.Contains(out.String(), "backup complete:") {
+		t.Errorf("stdout = %q, want no plain \"backup complete\" line -- the interactive renderer owns that", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr = %q, want empty on success", errOut.String())
+	}
+}
+
+func TestRunCmd_InteractiveTerminal_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.DeleteSnapshotErr = errBoom
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{
+				Destination: t.TempDir(),
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+		isTerminal:    func(io.Writer) bool { return true },
+		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
+			return backupFn(progress.NoOpReporter{})
+		},
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want the wrapped delete-snapshot failure")
+	}
+	if !strings.Contains(errOut.String(), "may remain") {
+		t.Errorf("stderr = %q, want an orphaned-snapshot warning", errOut.String())
+	}
+}
+
+// TestRunCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError covers
+// tui.ErrInteractiveRunIncomplete: the TUI exited without ever rendering
+// its own "error: ..." line (see tui.RunInteractive's doc comment), so
+// runVM must NOT set cmd.SilenceErrors here -- otherwise cobra's own
+// default "Error: ..." print is suppressed too and the run fails with no
+// message at all.
+func TestRunCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{
+				Destination: t.TempDir(),
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+		isTerminal:    func(io.Writer) bool { return true },
+		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
+			return nil, tui.ErrInteractiveRunIncomplete
+		},
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want ErrInteractiveRunIncomplete")
+	}
+	if !strings.Contains(errOut.String(), "interactive run ended before the backup finished") {
+		t.Errorf("stderr = %q, want cobra's own error line since the TUI never rendered one", errOut.String())
+	}
+}
+
+func TestRunCmd_NilIsTerminal_UsesPlainOutput(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{
+				Destination: t.TempDir(),
+				Compression: "gzip",
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+		// isTerminal and runInteractive both left nil.
+	})
+	var out bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(out.String(), "backup complete:") {
+		t.Errorf("stdout = %q, want the plain completion line when isTerminal is nil", out.String())
+	}
+}
+
+func TestDefaultIsTerminal_NonFileWriter_ReturnsFalse(t *testing.T) {
+	if defaultIsTerminal(&bytes.Buffer{}) {
+		t.Error("defaultIsTerminal(*bytes.Buffer) = true, want false")
+	}
+}
+
+func TestDefaultIsTerminal_RegularFile_ReturnsFalse(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "not-a-tty")
+	if err != nil {
+		t.Fatalf("CreateTemp() error = %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	if defaultIsTerminal(f) {
+		t.Error("defaultIsTerminal(regular *os.File) = true, want false")
 	}
 }
 
