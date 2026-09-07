@@ -157,8 +157,7 @@ func TestUpdate_CtrlC_AfterFinished_DoesNotCallCancel(t *testing.T) {
 	updated, _ := m.Update(resultMsg{result: &backup.Result{}})
 	m = updated.(Model)
 
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	m = updated.(Model)
+	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 
 	if canceled {
 		t.Error("cancel was called after the run already finished, want no-op")
