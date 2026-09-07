@@ -151,8 +151,14 @@ func (m *Model) applyEvent(e progress.Event) {
 		m.rows[idx].message = e.Message
 	}
 	if e.Stage == progress.Copying || e.Stage == progress.Compressing {
-		m.percent = e.Percent
 		m.showBar = true
+		// Only a percent-only tick (no Message) carries a meaningful
+		// Percent -- a message-bearing event's Percent is just the unset
+		// zero value, and applying it here would visibly snap the bar back
+		// to 0% if a message-bearing event ever arrives mid-stage.
+		if e.Message == "" {
+			m.percent = e.Percent
+		}
 	}
 }
 

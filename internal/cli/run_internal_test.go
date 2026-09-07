@@ -18,6 +18,7 @@ import (
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -290,6 +291,43 @@ func TestRunCmd_InteractiveTerminal_MergeFailure_WarnsAboutPossibleOrphanOnStder
 	}
 	if !strings.Contains(errOut.String(), "may remain") {
 		t.Errorf("stderr = %q, want an orphaned-snapshot warning", errOut.String())
+	}
+}
+
+// TestRunCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError covers
+// tui.ErrInteractiveRunIncomplete: the TUI exited without ever rendering
+// its own "error: ..." line (see tui.RunInteractive's doc comment), so
+// runVM must NOT set cmd.SilenceErrors here -- otherwise cobra's own
+// default "Error: ..." print is suppressed too and the run fails with no
+// message at all.
+func TestRunCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(path string) (*config.Config, error) {
+			return &config.Config{
+				Destination: t.TempDir(),
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+		isTerminal:    func(io.Writer) bool { return true },
+		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
+			return nil, tui.ErrInteractiveRunIncomplete
+		},
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want ErrInteractiveRunIncomplete")
+	}
+	if !strings.Contains(errOut.String(), "interactive run ended before the backup finished") {
+		t.Errorf("stderr = %q, want cobra's own error line since the TUI never rendered one", errOut.String())
 	}
 }
 

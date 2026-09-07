@@ -75,6 +75,25 @@ func TestUpdate_EventMsg_PercentOnlyUpdatesBarWithoutClearingMessage(t *testing.
 	}
 }
 
+// TestUpdate_EventMsg_MessageBearingEventDoesNotResetPercent covers a
+// message-bearing event (Percent left at its zero value) arriving after
+// percent ticks have already advanced the bar -- e.g. a future "resuming
+// after retry" event mid-Copying. Applying that event's zero Percent
+// would visibly snap the bar back to 0%.
+func TestUpdate_EventMsg_MessageBearingEventDoesNotResetPercent(t *testing.T) {
+	m := newModel("myvm", func() {})
+	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Copying, Message: "copying VM bundle to staging"}))
+	m = updated.(Model)
+	updated, _ = m.Update(eventMsg(progress.Event{Stage: progress.Copying, Percent: 0.75}))
+	m = updated.(Model)
+	updated, _ = m.Update(eventMsg(progress.Event{Stage: progress.Copying, Message: "resuming after retry"}))
+	m = updated.(Model)
+
+	if m.percent != 0.75 {
+		t.Errorf("percent = %v, want 0.75 preserved across a later message-bearing event", m.percent)
+	}
+}
+
 func TestUpdate_ResultMsg_Success_MarksAllRowsDone(t *testing.T) {
 	m := newModel("myvm", func() {})
 	updated, cmd := m.Update(resultMsg{result: &backup.Result{ArchivePath: "/dest/myvm-x/archive.tar.zst"}})

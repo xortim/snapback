@@ -58,6 +58,23 @@ func TestView_Success_ShowsArchivePath(t *testing.T) {
 	}
 }
 
+// TestView_Success_NilResult_DoesNotPanic covers a backupFn returning
+// (nil, nil) -- a valid Go zero-value combination the compiler doesn't
+// prevent, and not something backup.Run itself does today, but Model and
+// RunInteractive are exported so nothing stops a future or external
+// caller's backupFn from doing it. View() must not dereference
+// m.result.ArchivePath without checking m.result first.
+func TestView_Success_NilResult_DoesNotPanic(t *testing.T) {
+	m := newModel("myvm", func() {})
+	updated, _ := m.Update(resultMsg{result: nil, err: nil})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "backup complete") {
+		t.Errorf("view = %q, want a completion line even with a nil result", view)
+	}
+}
+
 func TestView_Failure_ShowsErrorAndCrossIcon(t *testing.T) {
 	m := newModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Merging, Message: "merging snapshot back"}))

@@ -48,8 +48,10 @@ func (m Model) View() string {
 		b.WriteString(noticeStyle.Render("cancelling... (waiting for the current step to finish)") + "\n")
 	}
 	if m.finished {
-		if m.err == nil {
+		if m.err == nil && m.result != nil {
 			b.WriteString(doneStyle.Render(fmt.Sprintf("backup complete: %s", m.result.ArchivePath)) + "\n")
+		} else if m.err == nil {
+			b.WriteString(doneStyle.Render("backup complete") + "\n")
 		} else {
 			b.WriteString(failStyle.Render(fmt.Sprintf("error: %v", m.err)) + "\n")
 		}

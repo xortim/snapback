@@ -6,7 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -91,16 +90,19 @@ func TestRunInteractive_ProgramQuitsBeforeResult_ReturnsError(t *testing.T) {
 	}
 
 	got, err := RunInteractive(&out, "myvm", cancel, backupFn, tea.WithInput(strings.NewReader("")), tea.WithFilter(quitEarly))
-	if err == nil {
-		t.Fatal("RunInteractive() error = nil, want a non-nil error for a run that quit before the backup finished")
+	if !errors.Is(err, ErrInteractiveRunIncomplete) {
+		t.Fatalf("RunInteractive() error = %v, want ErrInteractiveRunIncomplete", err)
 	}
 	if got != nil {
 		t.Errorf("RunInteractive() result = %v, want nil", got)
 	}
 
+	// RunInteractive waits for backupFn to actually return before it
+	// returns itself, so backupDone must already be closed here -- no
+	// select/timeout race needed.
 	select {
 	case <-backupDone:
-	case <-time.After(time.Second):
-		t.Error("backupFn was never unblocked -- RunInteractive should call cancel() before returning for an unfinished run")
+	default:
+		t.Error("backupFn had not returned by the time RunInteractive returned")
 	}
 }
