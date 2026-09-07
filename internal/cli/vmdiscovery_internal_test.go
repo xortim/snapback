@@ -74,9 +74,12 @@ func TestDefaultVMSearchDirs_IncludesVirtualMachinesUnderHome(t *testing.T) {
 	t.Setenv("HOME", home)
 
 	dirs := defaultVMSearchDirs()
-	want := filepath.Join(home, "Virtual Machines")
-	if len(dirs) != 1 || dirs[0] != want {
-		t.Errorf("defaultVMSearchDirs() = %v, want [%q]", dirs, want)
+	want := []string{
+		filepath.Join(home, "Virtual Machines.localized"),
+		filepath.Join(home, "Virtual Machines"),
+	}
+	if len(dirs) != len(want) || dirs[0] != want[0] || dirs[1] != want[1] {
+		t.Errorf("defaultVMSearchDirs() = %v, want %v", dirs, want)
 	}
 }
 
@@ -115,6 +118,20 @@ func TestDiscoverVMs_MatchesCaseInsensitiveSuffix(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].Name != "MyVM" || got[0].VMX != filepath.Join(bundle, "MyVM.vmx") {
 		t.Errorf("discoverVMs = %+v, want one entry for MyVM despite the differently-cased extension", got)
+	}
+}
+
+func TestDiscoverVMs_DedupesBundleFoundInMultipleDirs(t *testing.T) {
+	dirA, dirB := t.TempDir(), t.TempDir()
+	makeVMwareVM(t, dirA, "myvm", true)
+	makeVMwareVM(t, dirB, "myvm", true)
+
+	got, err := discoverVMs([]string{dirA, dirB})
+	if err != nil {
+		t.Fatalf("discoverVMs returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].Name != "myvm" || got[0].VMX != filepath.Join(dirA, "myvm.vmwarevm", "myvm.vmx") {
+		t.Errorf("discoverVMs = %+v, want one entry for myvm from the first dir (dirA takes precedence, no duplicate name for config.ValidateVMs to reject)", got)
 	}
 }
 

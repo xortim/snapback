@@ -55,7 +55,7 @@ sudo mv snapback /usr/local/bin/
 ## Quick start
 
 ```sh
-snapback init        # scans ~/Virtual Machines for .vmwarevm bundles (falls back to manual entry), prompts for destination + retention
+snapback init        # scans ~/Virtual Machines and ~/Virtual Machines.localized for .vmwarevm bundles (falls back to manual entry), prompts for destination + retention
 snapback run --all   # on-demand backup of every configured VM
 snapback status       # last run, next scheduled run, disk usage
 ```
