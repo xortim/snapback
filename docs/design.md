@@ -100,6 +100,9 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback status --vm <name>`   | Drill into a single VM: full consistency detail, disk usage, retention policy                    |
 | `snapback status --xbar`        | Same data, formatted for xbar plugin consumption                                                 |
 | `snapback prune`                | Manually trigger retention cleanup                                                               |
+| `snapback cleanup --vm <name>`  | Find and remove any `snapback-<timestamp>` snapshot orphaned by a `run` that died mid-choreography |
+| `snapback vm add`               | Discover and add new VMs to an existing config, without re-running the rest of `init`             |
+| `snapback vm remove <name>`     | Remove a VM from config.yaml (does not touch the VM itself or its existing archives)              |
 
 ## Config Reference
 
