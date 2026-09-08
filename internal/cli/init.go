@@ -88,20 +88,22 @@ func configFileExists(path string) bool {
 
 func newInitCmdWithDeps(deps initDeps) *cobra.Command {
 	var force bool
+	var extraSearchDirs []string
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Interactive config bootstrap",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			return runInit(cmd, deps, force)
+			return runInit(cmd, deps, force, extraSearchDirs)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "overwrite an existing config file")
+	cmd.Flags().StringArrayVar(&extraSearchDirs, "search-dir", nil, "additional directory to scan for VMs, alongside the defaults (repeatable)")
 	return cmd
 }
 
-func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
+func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []string) error {
 	configPath, err := configPathForCmd(cmd)
 	if err != nil {
 		return err
@@ -110,7 +112,14 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", configPath)
 	}
 
-	candidates, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, deps.searchDirs())
+	// extraSearchDirs (--search-dir, repeatable) is appended after the
+	// defaults rather than replacing them: config.yaml doesn't exist yet
+	// at the point init needs this (see #47), so there's no persisted
+	// vm_search_dirs list to merge with -- just the two hardcoded
+	// defaults plus whatever the user names on the command line for this
+	// one run.
+	searchDirs := append(deps.searchDirs(), extraSearchDirs...)
+	candidates, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, searchDirs)
 	if err != nil {
 		return fmt.Errorf("discover VMs: %w", err)
 	}
