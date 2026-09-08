@@ -73,6 +73,66 @@ func TestSelectVMs_DuplicateDiscoveredSelection_FailsBeforeManualEntry(t *testin
 	}
 }
 
+func TestSelectVMs_DuplicateName_TogglingOffOneKeepsOnlyTheOther(t *testing.T) {
+	candidates := []VMCandidate{
+		{Name: "dev", VMX: "/vms/a/dev.vmx", Dir: "a"},
+		{Name: "dev", VMX: "/vms/b/dev.vmx", Dir: "b"},
+	}
+	// Both pre-selected by default; "1" toggles the first (index 1) off,
+	// "0" confirms the remaining selection (just the second), "n" declines
+	// manual entry. Reproduces #48's actual motivation: before switching
+	// the MultiSelect option value from Name to VMX, both entries shared
+	// the same option value ("dev"), so there was no way to select just
+	// one of two same-named candidates -- toggling either one affected
+	// the same underlying value.
+	in := strings.NewReader("1\n0\nn\n")
+	var out bytes.Buffer
+
+	vms, err := selectVMs(context.Background(), in, &out, true, candidates)
+	if err != nil {
+		t.Fatalf("selectVMs() error = %v", err)
+	}
+	if len(vms) != 1 || vms[0].VMX != "/vms/b/dev.vmx" {
+		t.Errorf("selectVMs() = %+v, want only the second (untoggled) candidate", vms)
+	}
+}
+
+func TestSelectVMs_DuplicateNames_LabelsDisambiguateOnlyTheColliding(t *testing.T) {
+	candidates := []VMCandidate{
+		{Name: "dev", VMX: "/vms/a/dev.vmx", Dir: "Virtual Machines"},
+		{Name: "dev", VMX: "/vms/b/dev.vmx", Dir: "Virtual Machines.localized"},
+		{Name: "unique-vm", VMX: "/vms/c/unique-vm.vmx", Dir: "Virtual Machines"},
+	}
+	// Toggle the first "dev" candidate off (both start pre-selected, and
+	// selecting both would trip config.ValidateVMs's duplicate-name
+	// rejection -- irrelevant to what this test checks: the rendered
+	// labels, not the selection outcome).
+	in := strings.NewReader("1\n0\nn\n")
+	var out bytes.Buffer
+
+	_, err := selectVMs(context.Background(), in, &out, true, candidates)
+	if err != nil {
+		t.Fatalf("selectVMs() error = %v", err)
+	}
+	rendered := out.String()
+	if !strings.Contains(rendered, "dev (also in Virtual Machines)") || !strings.Contains(rendered, "dev (also in Virtual Machines.localized)") {
+		t.Errorf("output = %q, want both colliding \"dev\" entries labeled with their containing dir", rendered)
+	}
+	if strings.Contains(rendered, "unique-vm (also in") {
+		t.Errorf("output = %q, want the non-colliding \"unique-vm\" entry to keep its plain label", rendered)
+	}
+}
+
+func TestCandidateLabel(t *testing.T) {
+	c := VMCandidate{Name: "dev", Dir: "Virtual Machines.localized"}
+	if got := candidateLabel(c, false); got != "dev" {
+		t.Errorf("candidateLabel(c, false) = %q, want the plain name %q", got, "dev")
+	}
+	if got := candidateLabel(c, true); got != "⚠ dev (also in Virtual Machines.localized)" {
+		t.Errorf("candidateLabel(c, true) = %q, want the disambiguated label", got)
+	}
+}
+
 func TestSelectVMs_NoDiscoveredCandidates_PromptsManualEntryImmediately(t *testing.T) {
 	// No MultiSelect group exists when there are no candidates, so the
 	// first prompt is the manual-add confirm -- defaulted to true for

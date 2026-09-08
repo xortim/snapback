@@ -21,10 +21,14 @@ import (
 
 // VMCandidate is a VM internal/cli's discovery already found (see
 // internal/cli/vmdiscovery.go's discoverVMs), passed in rather than
-// discovered by this package.
+// discovered by this package. Dir is the basename of the search
+// directory the candidate was found in -- used only by selectVMs to
+// disambiguate two candidates sharing a Name (#48), never written to
+// config.yaml.
 type VMCandidate struct {
 	Name string
 	VMX  string
+	Dir  string
 }
 
 // errUnexpectedEOF is what runForm returns when an accessible-mode
@@ -217,6 +221,18 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 	}, nil
 }
 
+// candidateLabel returns c's display label for the MultiSelect option
+// list: the plain Name, unless duplicateName is true (another candidate
+// in the same list shares it), in which case it's suffixed with c.Dir
+// (the search directory's basename) so the user can tell the colliding
+// entries apart without seeing a full path.
+func candidateLabel(c VMCandidate, duplicateName bool) string {
+	if !duplicateName {
+		return c.Name
+	}
+	return fmt.Sprintf("⚠ %s (also in %s)", c.Name, c.Dir)
+}
+
 // selectVMs asks which discovered candidates to include (if any were
 // found), then always offers manual entry afterward -- discoverVMs
 // requires a bundle's .vmx to match the bundle's own name exactly, so a
@@ -227,9 +243,18 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 	var vms []config.VM
 
 	if len(candidates) > 0 {
+		// The option value is VMX, not Name: two candidates can now share a
+		// Name (a genuine collision across search dirs, see #48 -- discoverVMs
+		// no longer drops one to hide it), and VMX is the one field
+		// guaranteed unique per bundle. Using Name as the value here would
+		// make a duplicate-named pair indistinguishable once selected.
+		names := make(map[string]int, len(candidates))
+		for _, c := range candidates {
+			names[c.Name]++
+		}
 		options := make([]huh.Option[string], len(candidates))
 		for i, c := range candidates {
-			options[i] = huh.NewOption(c.Name, c.Name).Selected(true)
+			options[i] = huh.NewOption(candidateLabel(c, names[c.Name] > 1), c.VMX).Selected(true)
 		}
 		var selected []string
 		err := runForm(ctx, in, out, accessible,
@@ -244,12 +269,12 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 			return nil, err
 		}
 
-		byName := make(map[string]VMCandidate, len(candidates))
+		byVMX := make(map[string]VMCandidate, len(candidates))
 		for _, c := range candidates {
-			byName[c.Name] = c
+			byVMX[c.VMX] = c
 		}
-		for _, name := range selected {
-			c := byName[name]
+		for _, vmx := range selected {
+			c := byVMX[vmx]
 			vms = append(vms, config.VM{Name: c.Name, VMX: c.VMX})
 		}
 		// Validated here, before manual entry, so a bad selection fails fast
