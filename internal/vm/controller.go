@@ -59,4 +59,24 @@ type Controller interface {
 	// than aborting the rest, so a caller still removes everything it can
 	// and reports what it couldn't.
 	DeleteSnapshots(vmxPath string, names []string) (deleted []string, err error)
+
+	// CheckDiskConsistency verifies one virtual disk's snapshot chain --
+	// the descriptor at diskPath plus every parent it depends on, all the
+	// way down to the base disk -- returning a descriptive error if any
+	// link in that chain fails its own consistency check (VMware's
+	// "needs repair" state). diskPath is an absolute path to a single
+	// disk's top-level .vmdk descriptor file, not a vmxPath; a VM can have
+	// more than one virtual disk device, so internal/backup calls this
+	// once per disk it finds configured in the .vmx.
+	//
+	// Added after a real incident (see docs/design.md's "Risks &
+	// Gotchas"): `vmcli Snapshot Delete` reported success while merging a
+	// snapshot on a powered-off VM whose disk chain had a latent defect,
+	// leaving the source VM unable to power on afterward with no error
+	// ever surfaced. internal/backup.Run calls this both before taking a
+	// new snapshot (so a chain that's already broken is caught before
+	// piling another snapshot on top of it) and again right after the
+	// merge (so a merge that silently failed to apply is caught before
+	// the backup is reported as a success).
+	CheckDiskConsistency(diskPath string) error
 }

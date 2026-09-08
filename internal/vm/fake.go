@@ -14,8 +14,9 @@ type FakeVMController struct {
 	ToolsStateErr error
 	SnapshotErr   error
 
-	ListSnapshotsErr  error
-	DeleteSnapshotErr error
+	ListSnapshotsErr   error
+	DeleteSnapshotErr  error
+	DiskConsistencyErr error
 
 	snapshots map[string][]string
 }
@@ -81,4 +82,8 @@ func (f *FakeVMController) DeleteSnapshots(vmxPath string, names []string) (dele
 		deleted = append(deleted, name)
 	}
 	return deleted, errors.Join(errs...)
+}
+
+func (f *FakeVMController) CheckDiskConsistency(diskPath string) error {
+	return f.DiskConsistencyErr
 }

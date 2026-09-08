@@ -157,3 +157,18 @@ overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
   (post-snapshot, pre-merge) needs to be verified locally against a real
   VM with a checksum comparison — don't assume it's safe on APFS without
   checking.
+- **Confirmed real incident (2026-09-08):** `run` against a powered-off
+  VM merged a snapshot successfully per `vmcli`'s exit code, but the
+  on-disk consolidation silently failed to apply — the VM couldn't power
+  on afterward (`vmware-vdiskmanager -e` reported "needs repair" on the
+  affected `.vmdk`, confirmed against both the live VM and the archived
+  copy). `Run` now verifies disk-chain consistency both before taking a
+  new snapshot and again right after the merge, via
+  `vm.Controller.CheckDiskConsistency` (`vmware-vdiskmanager -e`) — but
+  **only when the VM isn't running**: its disk files are held open by a
+  live `vmware-vmx` process, so the check can't open them at all (fails
+  on lock contention, not a real verdict), and doesn't need to — a
+  running VM's chain is already known-good by the fact that it's
+  running. Recovery, if this happens again: `vmware-vdiskmanager -R
+  <disk>.vmdk` repaired both the live VM and a copy of the archived one
+  in this incident, cleanly, with no data loss.
