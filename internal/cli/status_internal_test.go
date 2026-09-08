@@ -95,6 +95,8 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 				{ArchiveID: "backed-up-vm-1", Manifest: backup.Manifest{VMName: "backed-up-vm", SizeBytes: 1024, Timestamp: ts1}},
 			}, nil
 		},
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -120,6 +122,104 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 	neverBackedUpRow := lines[2]
 	if !strings.Contains(neverBackedUpRow, "never-backed-up-vm") || !strings.Contains(neverBackedUpRow, "no backups yet") {
 		t.Errorf("never-backed-up-vm row = %q, want VM name and \"no backups yet\"", neverBackedUpRow)
+	}
+}
+
+func TestStatusCmd_Summary_NotesDiscoveredVMNotInConfig(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "configured-vm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) {
+			return []discoveredVM{{Name: "configured-vm"}, {Name: "new-vm"}}, nil
+		},
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "new-vm") {
+		t.Errorf("stderr = %q, want a note naming the undiscovered VM %q", errOut.String(), "new-vm")
+	}
+	if strings.Contains(errOut.String(), "configured-vm") {
+		t.Errorf("stderr = %q, want no note for the already-configured VM", errOut.String())
+	}
+}
+
+func TestStatusCmd_Summary_NoNoteWhenAllDiscoveredAreConfigured(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "configured-vm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) {
+			return []discoveredVM{{Name: "configured-vm"}}, nil
+		},
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr = %q, want empty when every discovered VM is already configured", errOut.String())
+	}
+}
+
+func TestStatusCmd_Summary_DiscoveryErrorIsNotedNotFatal(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, errBoom },
+	})
+	root.SetArgs([]string{"status"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil -- a discovery failure must not break status's core job", err)
+	}
+	if !strings.Contains(errOut.String(), errBoom.Error()) {
+		t.Errorf("stderr = %q, want it to note the discovery failure", errOut.String())
+	}
+	if !strings.Contains(out.String(), "myvm") {
+		t.Errorf("stdout = %q, want the summary table still printed", out.String())
+	}
+}
+
+func TestStatusCmd_VMFlag_DoesNotRunDiscovery(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { t.Fatal("searchDirs should not be called for --vm"); return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) {
+			t.Fatal("discoverVMs should not be called for --vm")
+			return nil, nil
+		},
+	})
+	root.SetArgs([]string{"status", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 }
 

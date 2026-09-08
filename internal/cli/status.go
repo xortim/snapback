@@ -12,17 +12,21 @@ import (
 )
 
 // statusDeps groups status's external dependencies so tests can
-// substitute a fake config loader and archive lister instead of touching
-// the real filesystem.
+// substitute a fake config loader, archive lister, and VM scanner
+// instead of touching the real filesystem.
 type statusDeps struct {
 	loadConfig   func(path string) (*config.Config, error)
 	listArchives func(destination string) ([]backup.Archive, error)
+	searchDirs   func() []string
+	discoverVMs  func(searchDirs []string) ([]discoveredVM, error)
 }
 
 func newStatusCmd() *cobra.Command {
 	return newStatusCmdWithDeps(statusDeps{
 		loadConfig:   config.Load,
 		listArchives: backup.ListArchives,
+		searchDirs:   defaultVMSearchDirs,
+		discoverVMs:  discoverVMs,
 	})
 }
 
@@ -67,7 +71,42 @@ func runStatus(cmd *cobra.Command, deps statusDeps, vmName string) error {
 	if vmName != "" {
 		return runStatusForVM(cmd, vmCfg, cfg.Retention, archives)
 	}
+
+	if err := warnUndiscoveredVMs(cmd, deps, cfg.VMs, configPath); err != nil {
+		return err
+	}
 	return runStatusSummary(cmd, cfg.VMs, archives)
+}
+
+// warnUndiscoveredVMs cross-references VM discovery against cfg's
+// configured VMs and prints a plain informational note to stderr for
+// each discovered VM not present in the config -- catching the case
+// where a VM was created (or skipped during init) and never added to
+// the backup set. Not a warning/error: a VM excluded on purpose (a
+// scratch VM) is a legitimate state. A discovery failure is reported
+// the same way rather than aborting status's core job of reporting
+// backup state.
+func warnUndiscoveredVMs(cmd *cobra.Command, deps statusDeps, vms []config.VM, configPath string) error {
+	candidates, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, deps.searchDirs())
+	if err != nil {
+		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not scan for VMs: %v\n", err)
+		return ferr
+	}
+
+	configured := make(map[string]bool, len(vms))
+	for _, vmCfg := range vms {
+		configured[vmCfg.Name] = true
+	}
+
+	for _, c := range candidates {
+		if configured[c.Name] {
+			continue
+		}
+		if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "note: discovered VM %q is not in config %s\n", c.Name, configPath); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // archivesForVM returns the subset of archives belonging to vmName,
