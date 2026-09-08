@@ -48,15 +48,32 @@ type VMCLIController struct {
 	// error (non-nil on nonzero exit). A field rather than a direct
 	// exec.Command call so tests can inject a fake.
 	run func(args ...string) (stdout, stderr []byte, err error)
+
+	// checkDiskConsistency runs vmware-vdiskmanager's read-only chain
+	// check against a single disk file, returning a descriptive error if
+	// it (or a parent it depends on) needs repair. A separate binary from
+	// vmcli, so a separate field rather than reusing run.
+	checkDiskConsistency func(diskPath string) error
 }
 
-// NewVMCLIController locates vmcli and returns a Controller backed by it.
+// NewVMCLIController locates vmcli and vmware-vdiskmanager and returns a
+// Controller backed by both -- the latter fails construction the same
+// way a missing vmcli already does, since CheckDiskConsistency's safety
+// check (see its doc comment on Controller) is not optional best-effort:
+// silently skipping it defeats the reason it exists.
 func NewVMCLIController() (*VMCLIController, error) {
-	path, err := findVMCLI()
+	vmcliPath, err := findVMCLI()
 	if err != nil {
 		return nil, err
 	}
-	return &VMCLIController{run: execVMCLI(path)}, nil
+	vdiskManagerPath, err := findVDiskManager()
+	if err != nil {
+		return nil, err
+	}
+	return &VMCLIController{
+		run:                  execVMCLI(vmcliPath),
+		checkDiskConsistency: execDiskConsistencyCheck(vdiskManagerPath),
+	}, nil
 }
 
 func execVMCLI(path string) func(args ...string) ([]byte, []byte, error) {
@@ -288,4 +305,11 @@ func (c *VMCLIController) DeleteSnapshots(vmxPath string, names []string) (delet
 		deleted = append(deleted, name)
 	}
 	return deleted, errors.Join(errs...)
+}
+
+// CheckDiskConsistency satisfies Controller.CheckDiskConsistency
+// (internal/vm/controller.go) via c.checkDiskConsistency, set at
+// construction time to shell out to vmware-vdiskmanager -e.
+func (c *VMCLIController) CheckDiskConsistency(diskPath string) error {
+	return c.checkDiskConsistency(diskPath)
 }

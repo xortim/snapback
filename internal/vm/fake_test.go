@@ -194,6 +194,25 @@ func TestFakeVMController_TracksSnapshotsPerVMXIndependently(t *testing.T) {
 	}
 }
 
+func TestFakeVMController_CheckDiskConsistency_DefaultsToNil(t *testing.T) {
+	f := vm.NewFakeVMController()
+
+	if err := f.CheckDiskConsistency("/vms/example.vmwarevm/disk.vmdk"); err != nil {
+		t.Errorf("CheckDiskConsistency() error = %v, want nil", err)
+	}
+}
+
+func TestFakeVMController_CheckDiskConsistency_ReturnsInjectedError(t *testing.T) {
+	f := vm.NewFakeVMController()
+	wantErr := errors.New("needs repair")
+	f.DiskConsistencyErr = wantErr
+
+	err := f.CheckDiskConsistency("/vms/example.vmwarevm/disk.vmdk")
+	if !errors.Is(err, wantErr) {
+		t.Errorf("CheckDiskConsistency() error = %v, want %v", err, wantErr)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

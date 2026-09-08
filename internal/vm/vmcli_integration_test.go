@@ -194,6 +194,29 @@ func TestIntegration_FrozenBundleReadableDuringSnapshot(t *testing.T) {
 	}
 }
 
+// TestIntegration_CheckDiskConsistency_ReportsHealthyDisk exercises the
+// real vmware-vdiskmanager wiring against the scratch VM's own disk --
+// added after the incident (docs/design.md's "Risks & Gotchas") where
+// vmcli reported a merge succeeded on a VM whose disk chain had already
+// silently failed this exact check. Requires SNAPBACK_TEST_DISK pointing
+// at the scratch VM's top-level .vmdk (found in its bundle directory,
+// e.g. "Virtual Disk.vmdk" for a VM with no snapshots yet).
+func TestIntegration_CheckDiskConsistency_ReportsHealthyDisk(t *testing.T) {
+	integrationVMX(t) // reuses the same env-var gate/skip behavior
+	diskPath := os.Getenv("SNAPBACK_TEST_DISK")
+	if diskPath == "" {
+		t.Skip("set SNAPBACK_TEST_DISK to the scratch VM's top-level .vmdk path")
+	}
+	ctrl, err := vm.NewVMCLIController()
+	if err != nil {
+		t.Fatalf("NewVMCLIController() error = %v", err)
+	}
+
+	if err := ctrl.CheckDiskConsistency(diskPath); err != nil {
+		t.Fatalf("CheckDiskConsistency(%s) error = %v, want nil for a healthy scratch VM disk", diskPath, err)
+	}
+}
+
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

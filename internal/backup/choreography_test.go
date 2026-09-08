@@ -739,6 +739,25 @@ func TestRun_OutputPermissions_MatchStagingHardening(t *testing.T) {
 	}
 }
 
+// writeMinimalVMXWithDisk is writeMinimalVMX plus a single virtual disk
+// device -- needed for the disk-consistency-check tests, since
+// checkDisksConsistent has nothing to check against a vmx with no disk
+// device lines (every writeMinimalVMX-based test exercises that
+// zero-disks no-op path already).
+func writeMinimalVMXWithDisk(t *testing.T) string {
+	t.Helper()
+	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	path := filepath.Join(bundle, "myvm.vmx")
+	contents := "guestOS = \"ubuntu-64\"\nnvme0:0.fileName = \"disk.vmdk\"\n"
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	return path
+}
+
 func writeMinimalVMX(t *testing.T) string {
 	t.Helper()
 	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
@@ -937,5 +956,123 @@ func TestRun_NilReporter_DoesNotPanic(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Run() error = %v, want nil (a nil reporter should default to a no-op, not panic)", err)
+	}
+}
+
+func TestRun_PreflightDiskConsistencyError_AbortsBeforeSnapshot(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsInstalled // not running -- the check applies
+	fake.DiskConsistencyErr = errBoom
+
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want it to be (or wrap) %v", err, errBoom)
+	}
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	if runErr.Stage >= progress.Snapshotting {
+		t.Errorf("runErr.Stage = %v, want < %v (aborted before Snapshot ran)", runErr.Stage, progress.Snapshotting)
+	}
+	if snapshots, _ := fake.ListSnapshots(vmxPath); len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; a broken disk chain must never get a new snapshot piled onto it", snapshots)
+	}
+}
+
+func TestRun_PreflightDiskConsistencyCheck_SkippedWhenVMIsRunning(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.DiskConsistencyErr = errBoom // must not matter -- the check is skipped for a running VM
+
+	_, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil; a running VM's disk chain must never be checked (its files are locked by the live vmware-vmx process)", err)
+	}
+}
+
+// diskConsistencyAfterMergeController wraps vm.FakeVMController so
+// CheckDiskConsistency succeeds on its first call (the preflight check)
+// and fails on every call after (the post-merge check) -- FakeVMController's
+// own DiskConsistencyErr is sticky (always the same answer), which can't
+// tell those two call sites apart.
+type diskConsistencyAfterMergeController struct {
+	*vm.FakeVMController
+	calls int
+}
+
+func (c *diskConsistencyAfterMergeController) CheckDiskConsistency(diskPath string) error {
+	c.calls++
+	if c.calls > 1 {
+		return errBoom
+	}
+	return nil
+}
+
+func TestRun_PostMergeDiskConsistencyError_ReturnsErrorAtMergingStage(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsInstalled // not running -- the check applies
+	ctrl := &diskConsistencyAfterMergeController{FakeVMController: fake}
+
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want it to be (or wrap) %v", err, errBoom)
+	}
+	var runErr *backup.RunError
+	if !errors.As(err, &runErr) {
+		t.Fatalf("errors.As(err, &runErr) = false, want true; err = %v", err)
+	}
+	if runErr.Stage != progress.Merging {
+		t.Errorf("runErr.Stage = %v, want %v", runErr.Stage, progress.Merging)
+	}
+	// The merge (DeleteSnapshot) itself must still have been called and
+	// have succeeded before this check ran -- otherwise this test would
+	// pass for the wrong reason (the merge failing, not the post-merge
+	// verification).
+	if snapshots, _ := fake.ListSnapshots(vmxPath); len(snapshots) != 0 {
+		t.Errorf("ListSnapshots() = %v, want empty; DeleteSnapshot must have run (and succeeded) before the post-merge check", snapshots)
+	}
+	if ctrl.calls != 2 {
+		t.Errorf("CheckDiskConsistency called %d times, want exactly 2 (preflight + post-merge)", ctrl.calls)
+	}
+}
+
+func TestRun_PostMergeDiskConsistencyCheck_SkippedWhenVMIsRunning(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	ctrl := &diskConsistencyAfterMergeController{FakeVMController: fake}
+
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil; a running VM's disk chain must never be checked", err)
+	}
+	if ctrl.calls != 0 {
+		t.Errorf("CheckDiskConsistency called %d times, want 0 for a running VM", ctrl.calls)
 	}
 }
