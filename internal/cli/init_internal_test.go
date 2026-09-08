@@ -227,6 +227,75 @@ func TestInitCmd_PassesDiscoveredCandidatesToWizard(t *testing.T) {
 	}
 }
 
+func TestInitCmd_SearchDirFlag_AppendedAfterDefaults(t *testing.T) {
+	var gotSearchDirs []string
+	deps := initDeps{
+		searchDirs: func() []string { return []string{"/default/a", "/default/b"} },
+		discoverVMs: func(dirs []string) ([]discoveredVM, error) {
+			gotSearchDirs = dirs
+			return nil, nil
+		},
+		marshal:    config.Marshal,
+		writeFile:  func(string, []byte) error { return nil },
+		fileExists: func(string) bool { return false },
+		isTerminal: func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--search-dir", "/extra/one", "--search-dir", "/extra/two"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := []string{"/default/a", "/default/b", "/extra/one", "/extra/two"}
+	if len(gotSearchDirs) != len(want) {
+		t.Fatalf("search dirs passed to discoverVMs = %v, want %v", gotSearchDirs, want)
+	}
+	for i, dir := range want {
+		if gotSearchDirs[i] != dir {
+			t.Errorf("search dirs passed to discoverVMs = %v, want %v", gotSearchDirs, want)
+			break
+		}
+	}
+}
+
+func TestInitCmd_NoSearchDirFlag_UsesOnlyDefaults(t *testing.T) {
+	var gotSearchDirs []string
+	deps := initDeps{
+		searchDirs: func() []string { return []string{"/default/a"} },
+		discoverVMs: func(dirs []string) ([]discoveredVM, error) {
+			gotSearchDirs = dirs
+			return nil, nil
+		},
+		marshal:    config.Marshal,
+		writeFile:  func(string, []byte) error { return nil },
+		fileExists: func(string) bool { return false },
+		isTerminal: func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(gotSearchDirs) != 1 || gotSearchDirs[0] != "/default/a" {
+		t.Errorf("search dirs passed to discoverVMs = %v, want just the default [/default/a]", gotSearchDirs)
+	}
+}
+
 func TestInitCmd_BothStdoutAndStdinAreTerminals_UsesNonAccessibleMode(t *testing.T) {
 	var gotAccessible bool
 	deps := initDeps{
