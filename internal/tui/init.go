@@ -142,13 +142,32 @@ type coreSettings struct {
 // "destination path → compression choice → retention numbers" (plus the
 // pre-existing notifications toggle, part of config.Config before this
 // rewrite and kept here rather than dropped).
-func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, accessible bool) (coreSettings, error) {
+//
+// prior, when non-nil (an existing config.yaml found under `init
+// --force`, per #52), seeds every field's starting value from it
+// instead of the hardcoded constants -- so re-running the wizard over
+// an established config proposes what's already there rather than
+// silently offering to reset destination/compression/retention/
+// notifications back to factory defaults. A fresh init (prior == nil)
+// is unaffected.
+func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, accessible bool, prior *config.Config) (coreSettings, error) {
 	destination := defaultDestination
 	compression := defaultCompression
-	keepLastStr := strconv.Itoa(defaultKeepLast)
-	keepDailyStr := strconv.Itoa(defaultKeepDaily)
-	keepWeeklyStr := strconv.Itoa(defaultKeepWeekly)
+	keepLast := defaultKeepLast
+	keepDaily := defaultKeepDaily
+	keepWeekly := defaultKeepWeekly
 	notify := true
+	if prior != nil {
+		destination = prior.Destination
+		compression = prior.Compression
+		keepLast = prior.Retention.KeepLast
+		keepDaily = prior.Retention.KeepDaily
+		keepWeekly = prior.Retention.KeepWeekly
+		notify = prior.Notifications.Enabled
+	}
+	keepLastStr := strconv.Itoa(keepLast)
+	keepDailyStr := strconv.Itoa(keepDaily)
+	keepWeeklyStr := strconv.Itoa(keepWeekly)
 
 	err := runForm(ctx, in, out, accessible,
 		huh.NewGroup(
@@ -184,9 +203,9 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 	// subsequent correction would otherwise reach here unvalidated -- see
 	// lineBufferedReader's doc comment) into errUnexpectedEOF before this
 	// line is ever reached. So this parse cannot fail.
-	keepLast, _ := strconv.Atoi(strings.TrimSpace(keepLastStr))
-	keepDaily, _ := strconv.Atoi(strings.TrimSpace(keepDailyStr))
-	keepWeekly, _ := strconv.Atoi(strings.TrimSpace(keepWeeklyStr))
+	keepLast, _ = strconv.Atoi(strings.TrimSpace(keepLastStr))
+	keepDaily, _ = strconv.Atoi(strings.TrimSpace(keepDailyStr))
+	keepWeekly, _ = strconv.Atoi(strings.TrimSpace(keepWeeklyStr))
 
 	return coreSettings{
 		destination: destination,
@@ -371,7 +390,11 @@ func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessib
 // check run.go already uses, since a real bubbletea program can't read a
 // non-terminal stdin (a pipe, a test's strings.Reader) correctly. It's
 // also how this package's own tests drive the wizard deterministically.
-func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate) (*config.Config, error) {
+//
+// prior is forwarded to promptCoreSettings -- see its doc comment. VM
+// selection and schedules are unaffected by prior; only core settings
+// seed from an existing config.
+func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate, prior *config.Config) (*config.Config, error) {
 	vms, err := selectVMs(ctx, in, out, accessible, candidates)
 	if err != nil {
 		return nil, err
@@ -380,7 +403,7 @@ func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible 
 		return nil, fmt.Errorf("invalid VM selection: %w", err)
 	}
 
-	settings, err := promptCoreSettings(ctx, in, out, accessible)
+	settings, err := promptCoreSettings(ctx, in, out, accessible, prior)
 	if err != nil {
 		return nil, err
 	}

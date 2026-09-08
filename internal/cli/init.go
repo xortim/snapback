@@ -20,18 +20,20 @@ import (
 type initDeps struct {
 	searchDirs   func() []string
 	discoverVMs  func(searchDirs []string) ([]discoveredVM, error)
+	loadConfig   func(path string) (*config.Config, error)
 	marshal      func(cfg *config.Config) ([]byte, error)
 	writeFile    func(path string, data []byte) error
 	fileExists   func(path string) bool
 	isTerminal   func(w io.Writer) bool
 	isTerminalIn func(r io.Reader) bool
-	runWizard    func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate) (*config.Config, error)
+	runWizard    func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate, prior *config.Config) (*config.Config, error)
 }
 
 func newInitCmd() *cobra.Command {
 	return newInitCmdWithDeps(initDeps{
 		searchDirs:   defaultVMSearchDirs,
 		discoverVMs:  discoverVMs,
+		loadConfig:   config.Load,
 		marshal:      config.Marshal,
 		writeFile:    writeConfigFile,
 		fileExists:   configFileExists,
@@ -108,8 +110,29 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	if err != nil {
 		return err
 	}
-	if !force && deps.fileExists(configPath) {
+	exists := deps.fileExists(configPath)
+	if !force && exists {
 		return fmt.Errorf("config already exists at %s (use --force to overwrite)", configPath)
+	}
+
+	// --force over an established config: seed the wizard's defaults from
+	// what's already there (see internal/tui/init.go's promptCoreSettings
+	// doc comment) instead of silently proposing to reset
+	// destination/compression/retention/notifications back to factory
+	// defaults. A failure to load the existing config doesn't abort
+	// init -- --force re-running over a config that's gone stale or
+	// unparseable is itself a legitimate reason to run init, so this
+	// falls back to the hardcoded defaults instead of blocking that.
+	var prior *config.Config
+	if force && exists {
+		loaded, loadErr := deps.loadConfig(configPath)
+		if loadErr != nil {
+			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not load existing config at %s, proposing defaults instead: %v\n", configPath, loadErr); err != nil {
+				return err
+			}
+		} else {
+			prior = loaded
+		}
 	}
 
 	// extraSearchDirs (--search-dir, repeatable) is appended after the
@@ -142,7 +165,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	inIsTerminal := deps.isTerminalIn != nil && deps.isTerminalIn(in)
 	accessible := !outIsTerminal || !inIsTerminal
 
-	cfg, err := deps.runWizard(cmd.Context(), in, out, accessible, tuiCandidates)
+	cfg, err := deps.runWizard(cmd.Context(), in, out, accessible, tuiCandidates, prior)
 	if err != nil {
 		return err
 	}
