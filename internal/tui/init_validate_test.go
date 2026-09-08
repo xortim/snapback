@@ -27,6 +27,30 @@ func TestValidateWritableDestination_NoExistingAncestor_ReturnsError(t *testing.
 	}
 }
 
+func TestValidateWritableDestination_MountRootAncestor_ReturnsNilDespiteBeingUnwritable(t *testing.T) {
+	// Reproduces the wizard's own defaultDestination
+	// (/Volumes/Backups/snapback) rejecting itself on a fresh run with the
+	// backup drive unmounted: the walk finds no existing "Backups"
+	// subdirectory and lands on the mount root itself, which is
+	// unwritable by design. volumesMountRoot is swapped for a dir this
+	// test controls since the real /Volumes doesn't exist on the
+	// ubuntu-latest CI runner (see volumesMountRoot's doc comment).
+	root := t.TempDir()
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatalf("Chmod() error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+
+	orig := volumesMountRoot
+	volumesMountRoot = root
+	t.Cleanup(func() { volumesMountRoot = orig })
+
+	err := validateWritableDestination(filepath.Join(root, "Backups", "snapback"))
+	if err != nil {
+		t.Errorf("validateWritableDestination() error = %v, want nil when landing on the mount root", err)
+	}
+}
+
 func TestValidateWritableDestination_UnwritableAncestor_ReturnsError(t *testing.T) {
 	if os.Getuid() == 0 {
 		t.Skip("running as root: permission bits don't block writes")

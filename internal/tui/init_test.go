@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/charmbracelet/huh"
 
@@ -49,6 +50,26 @@ func TestSelectVMs_CanAlsoAddManually(t *testing.T) {
 	}
 	if vms[0].Name != "dev" || vms[1].Name != "renamed" || vms[1].VMX != "/vms/renamed.vmwarevm/renamed.vmx" {
 		t.Errorf("selectVMs() = %+v, want dev then the manually-added renamed VM", vms)
+	}
+}
+
+func TestSelectVMs_DuplicateDiscoveredSelection_FailsBeforeManualEntry(t *testing.T) {
+	candidates := []VMCandidate{
+		{Name: "dev", VMX: "/vms/a/dev.vmx"},
+		{Name: "dev", VMX: "/vms/b/dev.vmx"},
+	}
+	// Both candidates are pre-selected by default, so "0" alone confirms
+	// the (duplicate-named) default selection with no toggling needed.
+	// Deliberately no manual-entry answers follow: that flow must never
+	// run once the discovered selection alone is already invalid, so a
+	// regression back to validating only after manual entry would fail on
+	// an EOF/errUnexpectedEOF instead of this error.
+	in := strings.NewReader("0\n")
+	var out bytes.Buffer
+
+	_, err := selectVMs(context.Background(), in, &out, true, candidates)
+	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("selectVMs() error = %v, want it to mention \"invalid VM selection\" and \"duplicate\"", err)
 	}
 }
 
@@ -232,6 +253,38 @@ func TestIsCancellation_WrappedUserAbortedError_ReturnsTrue(t *testing.T) {
 func TestIsCancellation_OtherError_LiveContext_ReturnsFalse(t *testing.T) {
 	if isCancellation(context.Background(), errors.New("boom")) {
 		t.Error("isCancellation() = true, want false for an unrelated error on a live context")
+	}
+}
+
+// blockingReader never returns from Read, standing in for an
+// accessible-mode input stream stalled on a real, otherwise-idle
+// terminal (e.g. `snapback init | tee log.txt`, still interactive on
+// stdin but accessible since accessible triggers on either stream not
+// being a real tty -- see internal/cli/init.go's runInit).
+type blockingReader struct{}
+
+func (blockingReader) Read([]byte) (int, error) {
+	select {}
+}
+
+func TestRunForm_Accessible_CtxAlreadyCanceled_ReturnsPromptlyWithoutReading(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out bytes.Buffer
+	var value string
+
+	done := make(chan error, 1)
+	go func() {
+		done <- runForm(ctx, blockingReader{}, &out, true, huh.NewGroup(huh.NewInput().Title("x").Value(&value)))
+	}()
+
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "init cancelled") {
+			t.Fatalf("runForm() error = %v, want it to mention \"init cancelled\"", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runForm() did not return promptly on an already-canceled ctx -- it's still blocked on the accessible-mode read")
 	}
 }
 

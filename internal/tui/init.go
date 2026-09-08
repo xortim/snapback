@@ -55,14 +55,25 @@ var errUnexpectedEOF = errors.New("read input: unexpected end of input")
 //
 // Any other failure is wrapped as "init cancelled: %w" only when the
 // cause is an actual ctx cancellation (ctrl+c propagated via huh's own
-// tea.WithContext, in the real interactive path) or huh's own
-// user-abort signal; anything else (a genuine huh/bubbletea error) is
-// reported as "interactive prompt failed: %w" instead of being
-// mislabeled as a cancellation. Accessible-mode forms don't support
-// mid-read cancellation the same way (huh's runAccessible takes no
-// context -- verified by reading huh@v1.0.0/form.go) -- acceptable
-// since accessible mode's real-world use is piped/scripted input, not an
-// interactive user waiting to press ctrl+c.
+// tea.WithContext, in the real interactive path, or noticed by the
+// select below in the accessible path) or huh's own user-abort signal;
+// anything else (a genuine huh/bubbletea error) is reported as
+// "interactive prompt failed: %w" instead of being mislabeled as a
+// cancellation.
+//
+// huh's runAccessible takes no context and blocks synchronously on the
+// input reader (verified by reading huh@v1.0.0/form.go), so
+// RunWithContext is run in a goroutine and raced against ctx.Done()
+// below rather than called inline: without that, a canceled ctx (ctrl+c
+// via cmd/snapback/main.go's signal.NotifyContext) would sit unnoticed
+// until the accessible-mode read it's blocked on eventually returns --
+// which, for a real interactive terminal with only stdout piped (still
+// accessible, since accessible triggers on either stream), may be
+// "never", leaving the process hung on a first ctrl-C and reliant on a
+// second one hitting the default SIGINT disposition to force-kill it.
+// The goroutine leaks past a cancellation (still blocked on the read),
+// same trade-off internal/cli/init.go's discoverVMsWithContext accepts
+// for the same reason: the process is exiting anyway.
 func runForm(ctx context.Context, in io.Reader, out io.Writer, accessible bool, groups ...*huh.Group) error {
 	form := huh.NewForm(groups...).WithOutput(out)
 
@@ -74,17 +85,24 @@ func runForm(ctx context.Context, in io.Reader, out io.Writer, accessible bool, 
 		form = form.WithInput(in)
 	}
 
-	err := form.RunWithContext(ctx)
-	if reader != nil && reader.sawEOF {
-		return errUnexpectedEOF
+	errCh := make(chan error, 1)
+	go func() { errCh <- form.RunWithContext(ctx) }()
+
+	select {
+	case <-ctx.Done():
+		return fmt.Errorf("init cancelled: %w", ctx.Err())
+	case err := <-errCh:
+		if reader != nil && reader.sawEOF {
+			return errUnexpectedEOF
+		}
+		if err == nil {
+			return nil
+		}
+		if isCancellation(ctx, err) {
+			return fmt.Errorf("init cancelled: %w", err)
+		}
+		return fmt.Errorf("interactive prompt failed: %w", err)
 	}
-	if err == nil {
-		return nil
-	}
-	if isCancellation(ctx, err) {
-		return fmt.Errorf("init cancelled: %w", err)
-	}
-	return fmt.Errorf("interactive prompt failed: %w", err)
 }
 
 // isCancellation reports whether err represents an actual cancellation
@@ -212,6 +230,13 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 		for _, name := range selected {
 			c := byName[name]
 			vms = append(vms, config.VM{Name: c.Name, VMX: c.VMX})
+		}
+		// Validated here, before manual entry, so a bad selection fails fast
+		// rather than after the user has also stepped through the (possibly
+		// multi-VM) manual-entry prompts below -- matching the fail-fast
+		// behavior of promptVMs, the plain prompter this wizard replaced.
+		if err := config.ValidateVMs(vms); err != nil {
+			return nil, fmt.Errorf("invalid VM selection: %w", err)
 		}
 	} else if _, err := fmt.Fprintln(out, "no VMs found automatically; add them manually below"); err != nil {
 		return nil, err

@@ -157,9 +157,10 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 }
 
 // discoverVMsWithContext runs scan (deps.discoverVMs) in a goroutine and
-// races it against ctx.Done() -- like promptString's read below, a
-// filesystem scan has no way to be interrupted directly, so without this
-// a SIGINT arriving while ~/Virtual Machines sits on a stalled network or
+// races it against ctx.Done() -- like the accessible-mode input read
+// internal/tui/init.go's runForm races the same way, a filesystem scan
+// has no way to be interrupted directly, so without this a SIGINT
+// arriving while ~/Virtual Machines sits on a stalled network or
 // external volume would have nothing to notice it, leaving init hung
 // despite ctx already being canceled. The goroutine leaks past
 // cancellation, blocked on the scan, but the process is exiting anyway.

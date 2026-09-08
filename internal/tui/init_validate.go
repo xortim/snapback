@@ -10,6 +10,13 @@ import (
 	"github.com/xortim/snapback/internal/config"
 )
 
+// volumesMountRoot is macOS's fixed external-drive mount root -- a var,
+// not a literal, purely so init_validate_test.go can point
+// validateWritableDestination's mount-root bypass at a directory it
+// controls instead of the real /Volumes (CI runs on ubuntu-latest per
+// .github/workflows/ci.yml, where /Volumes doesn't exist at all).
+var volumesMountRoot = "/Volumes"
+
 // validateWritableDestination is the huh Validate hook for the
 // destination Input field. It expands a leading "~" (via
 // config.ExpandTilde, the same expansion config.Load applies to an
@@ -47,6 +54,20 @@ func validateWritableDestination(path string) error {
 			return fmt.Errorf("no existing ancestor directory found for %s", expanded)
 		}
 		dir = parent
+	}
+
+	// /Volumes itself is root-owned, mode 0755, never writable by an
+	// ordinary user directly, but that's fine because nothing is ever
+	// meant to write into /Volumes itself: an attached drive appears as a
+	// writable directory *under* it. An unmounted backup drive makes its
+	// own not-yet-existing mountpoint invisible to the os.Stat walk above,
+	// which then lands here instead -- including for this wizard's own
+	// defaultDestination (/Volumes/Backups/snapback) on a completely fresh
+	// run, before the drive is even plugged in. Treat landing exactly on
+	// the mount root as "can't verify yet" rather than a hard failure, so
+	// accepting the pre-filled default doesn't reject itself.
+	if dir == volumesMountRoot {
+		return nil
 	}
 
 	probe, err := os.CreateTemp(dir, ".snapback-writetest-*")
