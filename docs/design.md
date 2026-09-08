@@ -105,7 +105,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 
 ```yaml
 # ~/.config/snapback/config.yaml
-destination: /Volumes/Backups/snapback
+destination: ~/Backups/snapback
 compression: zstd # zstd | gzip
 retention:
   keep_last: 5
@@ -134,7 +134,7 @@ dev-ubuntu: last backup 2h ago (2.1 GB) | color=green
 win-testbed: last backup 6d ago (4.8 GB) | color=orange
 ---
 Run All Backups Now | bash='/usr/local/bin/snapback' param1=run param2=--all terminal=false refresh=true
-Open Backup Folder | bash='/usr/bin/open' param1=/Volumes/Backups/snapback terminal=false
+Open Backup Folder | bash='/usr/bin/open' param1=~/Backups/snapback terminal=false
 ```
 
 Save the wrapper as `~/Library/Application Support/xbar/plugins/snapback.5m.sh` — the `5m` in the filename sets the 5-minute refresh interval, which is xbar convention, not something you configure separately.

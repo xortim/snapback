@@ -66,7 +66,7 @@ Full command reference is in [`docs/design.md`](docs/design.md#command-reference
 
 ```yaml
 # ~/.config/snapback/config.yaml
-destination: /Volumes/Backups/snapback
+destination: ~/Backups/snapback
 compression: zstd
 retention:
   keep_last: 5
