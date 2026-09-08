@@ -95,7 +95,7 @@ func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 	}
 	tuiCandidates := make([]tui.VMCandidate, len(newCandidates))
 	for i, c := range newCandidates {
-		tuiCandidates[i] = tui.VMCandidate{Name: c.Name, VMX: c.VMX}
+		tuiCandidates[i] = tui.VMCandidate{Name: c.Name, VMX: c.VMX, Dir: c.Dir}
 	}
 
 	out := cmd.OutOrStdout()
