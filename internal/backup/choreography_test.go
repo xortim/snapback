@@ -1076,3 +1076,173 @@ func TestRun_PostMergeDiskConsistencyCheck_SkippedWhenVMIsRunning(t *testing.T) 
 		t.Errorf("CheckDiskConsistency called %d times, want 0 for a running VM", ctrl.calls)
 	}
 }
+
+// toolsStateFlipsAfterFirstCallController reports ToolsRunning on its
+// first CheckToolsState call and ToolsInstalled (not running) on every
+// call after, simulating a VM that gets shut down partway through a Run
+// -- specifically between the preflight check (gated on the pre-Snapshot
+// reading) and the post-merge check, which must re-query CheckToolsState
+// fresh rather than reuse that stale pre-Snapshot value. With the stale
+// value, the post-merge check would wrongly be skipped as "still running"
+// and a genuinely damaged chain on the now-powered-off VM would go
+// undetected.
+type toolsStateFlipsAfterFirstCallController struct {
+	*vm.FakeVMController
+	toolsStateCalls    int
+	diskConsistencyErr error
+}
+
+func (c *toolsStateFlipsAfterFirstCallController) CheckToolsState(vmxPath string) (vm.ToolsState, error) {
+	c.toolsStateCalls++
+	if c.toolsStateCalls == 1 {
+		return vm.ToolsRunning, nil
+	}
+	return vm.ToolsInstalled, nil
+}
+
+func (c *toolsStateFlipsAfterFirstCallController) CheckDiskConsistency(diskPath string) error {
+	return c.diskConsistencyErr
+}
+
+func TestRun_PostMergeDiskConsistencyCheck_UsesFreshToolsStateNotStalePreRunValue(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	ctrl := &toolsStateFlipsAfterFirstCallController{
+		FakeVMController:   fake,
+		diskConsistencyErr: errBoom,
+	}
+
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	// A stale pre-Snapshot toolsState of ToolsRunning would have skipped
+	// the post-merge check entirely, silently swallowing errBoom and
+	// returning nil here -- exactly the false "success" this test guards
+	// against.
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want it to be (or wrap) %v; the post-merge check must run against the fresh (now not-running) tools state, not the stale pre-Snapshot one", err, errBoom)
+	}
+	if ctrl.toolsStateCalls < 2 {
+		t.Fatalf("CheckToolsState called %d times, want at least 2 (pre-Snapshot, then again post-merge)", ctrl.toolsStateCalls)
+	}
+}
+
+func TestRun_PostMergeDiskConsistencyError_PreservesStagingCopy(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisk(t)
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsInstalled // not running -- the check applies
+	ctrl := &diskConsistencyAfterMergeController{FakeVMController: fake}
+
+	stagingDir := t.TempDir()
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  stagingDir,
+	})
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Run() error = %v, want it to be (or wrap) %v", err, errBoom)
+	}
+
+	entries, readErr := os.ReadDir(stagingDir)
+	if readErr != nil {
+		t.Fatalf("ReadDir(stagingDir) error = %v", readErr)
+	}
+	if len(entries) == 0 {
+		t.Fatal("staging directory was removed despite the post-merge disk consistency check failing -- the one good pre-merge copy of the VM must be preserved for manual recovery, not discarded")
+	}
+}
+
+// recordingDiskConsistencyController records every diskPath
+// CheckDiskConsistency is called with (in call order) and lets a test
+// supply a per-path error via errFor, to verify checkDisksConsistent's
+// path resolution and continue-on-failure aggregation.
+type recordingDiskConsistencyController struct {
+	*vm.FakeVMController
+	checkedPaths []string
+	errFor       func(diskPath string) error
+}
+
+func (c *recordingDiskConsistencyController) CheckDiskConsistency(diskPath string) error {
+	c.checkedPaths = append(c.checkedPaths, diskPath)
+	if c.errFor != nil {
+		return c.errFor(diskPath)
+	}
+	return nil
+}
+
+func TestRun_PreflightDiskConsistencyCheck_ReportsEveryFailingDisk(t *testing.T) {
+	vmxPath := writeMinimalVMXWithDisks(t, "nvme0:0.fileName = \"Disk A.vmdk\"\nnvme0:1.fileName = \"Disk B.vmdk\"\n")
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsInstalled
+	ctrl := &recordingDiskConsistencyController{
+		FakeVMController: fake,
+		errFor: func(diskPath string) error {
+			return fmt.Errorf("broken: %s", filepath.Base(diskPath))
+		},
+	}
+
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("Run() error = nil, want a disk consistency error")
+	}
+	if len(ctrl.checkedPaths) != 2 {
+		t.Fatalf("CheckDiskConsistency called for %d disks, want 2 -- both disks must be checked even though the first fails", len(ctrl.checkedPaths))
+	}
+	if !strings.Contains(err.Error(), "Disk A.vmdk") || !strings.Contains(err.Error(), "Disk B.vmdk") {
+		t.Errorf("Run() error = %q, want it to mention both failing disks", err.Error())
+	}
+}
+
+func TestRun_PreflightDiskConsistencyCheck_UsesAbsoluteDiskPathVerbatim(t *testing.T) {
+	externalDisk := filepath.Join(t.TempDir(), "External Disk.vmdk")
+	vmxPath := writeMinimalVMXWithDisks(t, fmt.Sprintf("nvme0:0.fileName = %q\n", externalDisk))
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsInstalled
+	ctrl := &recordingDiskConsistencyController{FakeVMController: fake}
+
+	_, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+	// Checked twice -- once preflight, once post-merge, both for a
+	// powered-off VM -- but every call must use externalDisk verbatim.
+	for i, got := range ctrl.checkedPaths {
+		if got != externalDisk {
+			t.Errorf("CheckDiskConsistency call %d = %q, want %q verbatim -- an absolute disk path must not be joined under the bundle dir", i, got, externalDisk)
+		}
+	}
+	if len(ctrl.checkedPaths) == 0 {
+		t.Fatal("CheckDiskConsistency was never called")
+	}
+}
+
+// writeMinimalVMXWithDisks is writeMinimalVMXWithDisk but with caller-
+// supplied disk device lines, for tests exercising more than one disk or a
+// disk fileName that needs to be something other than a bare relative name.
+func writeMinimalVMXWithDisks(t *testing.T, diskLines string) string {
+	t.Helper()
+	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	path := filepath.Join(bundle, "myvm.vmx")
+	contents := "guestOS = \"ubuntu-64\"\n" + diskLines
+	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	return path
+}

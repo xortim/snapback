@@ -217,6 +217,43 @@ func TestIntegration_CheckDiskConsistency_ReportsHealthyDisk(t *testing.T) {
 	}
 }
 
+// TestIntegration_CheckDiskConsistency_ReportsBrokenChain exercises
+// CheckDiskConsistency's failure path against the real vmware-vdiskmanager
+// binary -- until now only the healthy-disk case
+// (TestIntegration_CheckDiskConsistency_ReportsHealthyDisk) ran against
+// the real binary, so a future Fusion release changing vdiskmanager's
+// exit code or moving its diagnosis from stderr to stdout could silently
+// break the failure path this whole feature exists for, with nothing in
+// the suite noticing.
+//
+// Deliberately corrupting the scratch VM's own disk chain isn't safe to
+// automate (destructive, and not reliably reversible), so this instead
+// points vdiskmanager at a file that is not a valid disk descriptor at
+// all -- e.g. a plain text file -- which still forces the same nonzero-
+// exit, stderr-diagnosis code path CheckDiskConsistency relies on for a
+// genuinely broken chain, verifying the error is both non-nil and
+// carries a real message rather than a swallowed/empty one.
+func TestIntegration_CheckDiskConsistency_ReportsBrokenChain(t *testing.T) {
+	integrationVMX(t) // reuses the same env-var gate/skip behavior
+	ctrl, err := vm.NewVMCLIController()
+	if err != nil {
+		t.Fatalf("NewVMCLIController() error = %v", err)
+	}
+
+	notADisk := filepath.Join(t.TempDir(), "not-a-disk.vmdk")
+	if err := os.WriteFile(notADisk, []byte("this is not a vmdk descriptor\n"), 0o600); err != nil {
+		t.Fatalf("write fake disk file: %v", err)
+	}
+
+	err = ctrl.CheckDiskConsistency(notADisk)
+	if err == nil {
+		t.Fatal("CheckDiskConsistency() error = nil, want an error for a file that isn't a real disk descriptor")
+	}
+	if err.Error() == "" {
+		t.Error("CheckDiskConsistency() error message is empty, want vdiskmanager's diagnosis surfaced")
+	}
+}
+
 func sha256File(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {

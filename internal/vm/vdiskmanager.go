@@ -3,7 +3,6 @@ package vm
 import (
 	"bytes"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 )
@@ -18,20 +17,9 @@ var vdiskManagerCandidatePaths = []string{
 
 // findVDiskManager locates the vmware-vdiskmanager binary:
 // $SNAPBACK_VDISKMANAGER_PATH override first, then the known Fusion
-// install location, then $PATH. Mirrors findVMCLI.
+// install location, then $PATH.
 func findVDiskManager() (string, error) {
-	if p := os.Getenv("SNAPBACK_VDISKMANAGER_PATH"); p != "" {
-		return p, nil
-	}
-	for _, p := range vdiskManagerCandidatePaths {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	if p, err := exec.LookPath("vmware-vdiskmanager"); err == nil {
-		return p, nil
-	}
-	return "", fmt.Errorf("vmware-vdiskmanager not found: checked $SNAPBACK_VDISKMANAGER_PATH, %v, and $PATH", vdiskManagerCandidatePaths)
+	return findFusionBinary("SNAPBACK_VDISKMANAGER_PATH", "vmware-vdiskmanager", vdiskManagerCandidatePaths)
 }
 
 // execDiskConsistencyCheck runs `vmware-vdiskmanager -e diskPath` --

@@ -79,6 +79,45 @@ func TestReadDiskFiles_SkipsCDROMAndEmptyDriveDevices(t *testing.T) {
 	}
 }
 
+func TestReadDiskFiles_SkipsDisconnectedDevice(t *testing.T) {
+	path := writeTempVMX(t, "nvme0:0.fileName = \"Virtual Disk.vmdk\"\nsata0:1.present = \"FALSE\"\nsata0:1.fileName = \"OldDisk.vmdk\"\n")
+
+	got, err := readDiskFiles(path)
+	if err != nil {
+		t.Fatalf("readDiskFiles() error = %v, want nil", err)
+	}
+	if len(got) != 1 || got[0] != "Virtual Disk.vmdk" {
+		t.Errorf("readDiskFiles() = %v, want only the connected disk, not the stale disconnected device's fileName", got)
+	}
+}
+
+func TestReadDiskFiles_PresentTrueDeviceIsKept(t *testing.T) {
+	path := writeTempVMX(t, "nvme0:0.present = \"TRUE\"\nnvme0:0.fileName = \"Virtual Disk.vmdk\"\n")
+
+	got, err := readDiskFiles(path)
+	if err != nil {
+		t.Fatalf("readDiskFiles() error = %v, want nil", err)
+	}
+	if len(got) != 1 || got[0] != "Virtual Disk.vmdk" {
+		t.Errorf("readDiskFiles() = %v, want [Virtual Disk.vmdk]", got)
+	}
+}
+
+func TestReadDiskFiles_PresentKeyBeforeFileNameKey(t *testing.T) {
+	// The "present" key can appear before its sibling "fileName" key in a
+	// real .vmx file -- this must still be caught even though readDiskFiles
+	// hasn't seen the fileName key yet at the point it encounters "present".
+	path := writeTempVMX(t, "sata0:1.present = \"FALSE\"\nsata0:1.fileName = \"OldDisk.vmdk\"\nnvme0:0.fileName = \"Virtual Disk.vmdk\"\n")
+
+	got, err := readDiskFiles(path)
+	if err != nil {
+		t.Fatalf("readDiskFiles() error = %v, want nil", err)
+	}
+	if len(got) != 1 || got[0] != "Virtual Disk.vmdk" {
+		t.Errorf("readDiskFiles() = %v, want only the connected disk", got)
+	}
+}
+
 func TestReadDiskFiles_NoDiskDevicesReturnsEmpty(t *testing.T) {
 	path := writeTempVMX(t, "guestOS = \"ubuntu-64\"\n")
 

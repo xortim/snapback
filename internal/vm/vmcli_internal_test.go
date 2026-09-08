@@ -498,6 +498,45 @@ func TestFindVMCLI_EnvOverrideTakesPrecedence(t *testing.T) {
 	}
 }
 
+func TestNewVMCLIController_SucceedsWithoutVDiskManager(t *testing.T) {
+	// cleanup shares this constructor with run but never calls
+	// CheckDiskConsistency -- construction must not fail over a binary
+	// only run's disk-consistency checks need.
+	t.Setenv("SNAPBACK_VMCLI_PATH", "/custom/vmcli")
+	t.Setenv("SNAPBACK_VDISKMANAGER_PATH", "")
+	t.Setenv("PATH", t.TempDir())
+	orig := vdiskManagerCandidatePaths
+	vdiskManagerCandidatePaths = []string{"/nonexistent/vdiskmanager-probe-path"}
+	defer func() { vdiskManagerCandidatePaths = orig }()
+
+	ctrl, err := NewVMCLIController()
+	if err != nil {
+		t.Fatalf("NewVMCLIController() error = %v, want nil even though vmware-vdiskmanager can't be found", err)
+	}
+	if ctrl.checkDiskConsistency == nil {
+		t.Fatal("checkDiskConsistency field is nil")
+	}
+}
+
+func TestNewVMCLIController_CheckDiskConsistencyFailsAtCallTimeWithoutVDiskManager(t *testing.T) {
+	t.Setenv("SNAPBACK_VMCLI_PATH", "/custom/vmcli")
+	t.Setenv("SNAPBACK_VDISKMANAGER_PATH", "")
+	t.Setenv("PATH", t.TempDir())
+	orig := vdiskManagerCandidatePaths
+	vdiskManagerCandidatePaths = []string{"/nonexistent/vdiskmanager-probe-path"}
+	defer func() { vdiskManagerCandidatePaths = orig }()
+
+	ctrl, err := NewVMCLIController()
+	if err != nil {
+		t.Fatalf("NewVMCLIController() error = %v, want nil", err)
+	}
+
+	err = ctrl.CheckDiskConsistency("/vms/example.vmwarevm/Virtual Disk.vmdk")
+	if err == nil {
+		t.Fatal("CheckDiskConsistency() error = nil, want an error once vmware-vdiskmanager is actually needed")
+	}
+}
+
 func TestFindVMCLI_NotFoundReturnsError(t *testing.T) {
 	t.Setenv("SNAPBACK_VMCLI_PATH", "")
 	t.Setenv("PATH", t.TempDir())

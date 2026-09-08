@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -22,18 +21,7 @@ var vmcliCandidatePaths = []string{
 // findVMCLI locates the vmcli binary: $SNAPBACK_VMCLI_PATH override first,
 // then the known Fusion install location, then $PATH.
 func findVMCLI() (string, error) {
-	if p := os.Getenv("SNAPBACK_VMCLI_PATH"); p != "" {
-		return p, nil
-	}
-	for _, p := range vmcliCandidatePaths {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
-	if p, err := exec.LookPath("vmcli"); err == nil {
-		return p, nil
-	}
-	return "", fmt.Errorf("vmcli not found: checked $SNAPBACK_VMCLI_PATH, %v, and $PATH", vmcliCandidatePaths)
+	return findFusionBinary("SNAPBACK_VMCLI_PATH", "vmcli", vmcliCandidatePaths)
 }
 
 // VMCLIController is the real Controller, backed by vmcli (Fusion 13+).
@@ -56,24 +44,37 @@ type VMCLIController struct {
 	checkDiskConsistency func(diskPath string) error
 }
 
-// NewVMCLIController locates vmcli and vmware-vdiskmanager and returns a
-// Controller backed by both -- the latter fails construction the same
-// way a missing vmcli already does, since CheckDiskConsistency's safety
-// check (see its doc comment on Controller) is not optional best-effort:
-// silently skipping it defeats the reason it exists.
+// NewVMCLIController locates vmcli and returns a Controller backed by it.
+// vmware-vdiskmanager (needed only by CheckDiskConsistency) is resolved
+// lazily on first use rather than here: this constructor is shared by
+// every single-VM subcommand (internal/cli/deps.go's defaultVMCmdDeps),
+// including `cleanup`, which never calls CheckDiskConsistency -- failing
+// construction over a binary a given command will never invoke would
+// break cleanup (the command that exists specifically to recover from a
+// crashed run) on any install where vmcli is present but
+// vmware-vdiskmanager is missing or relocated.
 func NewVMCLIController() (*VMCLIController, error) {
 	vmcliPath, err := findVMCLI()
 	if err != nil {
 		return nil, err
 	}
-	vdiskManagerPath, err := findVDiskManager()
-	if err != nil {
-		return nil, err
-	}
 	return &VMCLIController{
 		run:                  execVMCLI(vmcliPath),
-		checkDiskConsistency: execDiskConsistencyCheck(vdiskManagerPath),
+		checkDiskConsistency: lazyDiskConsistencyCheck(),
 	}, nil
+}
+
+// lazyDiskConsistencyCheck resolves vmware-vdiskmanager's path on first
+// call rather than at construction time -- see NewVMCLIController's doc
+// comment for why.
+func lazyDiskConsistencyCheck() func(diskPath string) error {
+	return func(diskPath string) error {
+		path, err := findVDiskManager()
+		if err != nil {
+			return err
+		}
+		return execDiskConsistencyCheck(path)(diskPath)
+	}
 }
 
 func execVMCLI(path string) func(args ...string) ([]byte, []byte, error) {
