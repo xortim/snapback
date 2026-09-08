@@ -16,10 +16,15 @@ import (
 const vmBundleExt = ".vmwarevm"
 
 // discoveredVM is one candidate VM found by discoverVMs, offered to the
-// user during `snapback init` for inclusion in config.yaml.
+// user during `snapback init`/`snapback vm add` for inclusion in
+// config.yaml. Dir is the basename of the search directory the bundle
+// was found in (e.g. "Virtual Machines.localized") -- used only to
+// disambiguate two candidates that share a Name (see #48) when
+// presenting them to the user; it's never written to config.yaml.
 type discoveredVM struct {
 	Name string
 	VMX  string
+	Dir  string
 }
 
 // discoverVMs scans each directory in searchDirs (one level down, not
@@ -29,15 +34,20 @@ type discoveredVM struct {
 // every Fusion-created VM follows. A directory that doesn't exist is
 // skipped, not an error: ~/Virtual Machines may not exist if Fusion was
 // never run or VMs live elsewhere, and the caller can still fall back to
-// manual entry. searchDirs can legitimately overlap in content (see
-// defaultVMSearchDirs) so a bundle name already found in an earlier
-// directory is skipped rather than added again -- otherwise the same VM
-// showing up under both directories produces two candidates with
-// identical names, which config.ValidateVMs then rejects outright.
-// Results are sorted by Name for deterministic output.
+// manual entry.
+//
+// Two bundles with the same Name found under different search
+// directories are both returned rather than one being silently dropped
+// -- searchDirs can legitimately overlap in content (see
+// defaultVMSearchDirs's two Fusion-library-location defaults, and #47's
+// user-configurable --search-dir), and a genuine name collision across
+// two distinct VM libraries is a real scenario worth surfacing to the
+// caller rather than hiding one candidate outright. The caller
+// (selectVMs, in internal/tui/init.go) is responsible for flagging the
+// collision to the user; config.ValidateVMs is the guardrail if both are
+// selected anyway. Results are sorted by Name for deterministic output.
 func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 	var found []discoveredVM
-	seen := make(map[string]bool)
 	for _, dir := range searchDirs {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -51,16 +61,12 @@ func discoverVMs(searchDirs []string) ([]discoveredVM, error) {
 				continue
 			}
 			name := entry.Name()[:len(entry.Name())-len(vmBundleExt)]
-			if seen[name] {
-				continue
-			}
 			vmx := filepath.Join(dir, entry.Name(), name+".vmx")
 			info, err := os.Stat(vmx)
 			if err != nil || !info.Mode().IsRegular() {
 				continue
 			}
-			found = append(found, discoveredVM{Name: name, VMX: vmx})
-			seen[name] = true
+			found = append(found, discoveredVM{Name: name, VMX: vmx, Dir: filepath.Base(dir)})
 		}
 	}
 	sort.Slice(found, func(i, j int) bool { return found[i].Name < found[j].Name })

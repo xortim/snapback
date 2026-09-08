@@ -116,7 +116,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool) error {
 	}
 	tuiCandidates := make([]tui.VMCandidate, len(candidates))
 	for i, c := range candidates {
-		tuiCandidates[i] = tui.VMCandidate{Name: c.Name, VMX: c.VMX}
+		tuiCandidates[i] = tui.VMCandidate{Name: c.Name, VMX: c.VMX, Dir: c.Dir}
 	}
 
 	out := cmd.OutOrStdout()

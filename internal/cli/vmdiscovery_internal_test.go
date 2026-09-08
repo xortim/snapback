@@ -121,7 +121,7 @@ func TestDiscoverVMs_MatchesCaseInsensitiveSuffix(t *testing.T) {
 	}
 }
 
-func TestDiscoverVMs_DedupesBundleFoundInMultipleDirs(t *testing.T) {
+func TestDiscoverVMs_ReturnsBothWhenSameNameFoundInMultipleDirs(t *testing.T) {
 	dirA, dirB := t.TempDir(), t.TempDir()
 	makeVMwareVM(t, dirA, "myvm", true)
 	makeVMwareVM(t, dirB, "myvm", true)
@@ -130,8 +130,25 @@ func TestDiscoverVMs_DedupesBundleFoundInMultipleDirs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("discoverVMs returned error: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "myvm" || got[0].VMX != filepath.Join(dirA, "myvm.vmwarevm", "myvm.vmx") {
-		t.Errorf("discoverVMs = %+v, want one entry for myvm from the first dir (dirA takes precedence, no duplicate name for config.ValidateVMs to reject)", got)
+	if len(got) != 2 {
+		t.Fatalf("discoverVMs = %+v, want both same-named candidates returned (see #48 -- a genuine collision must surface, not be silently dropped)", got)
+	}
+	wantDirByVMX := map[string]string{
+		filepath.Join(dirA, "myvm.vmwarevm", "myvm.vmx"): filepath.Base(dirA),
+		filepath.Join(dirB, "myvm.vmwarevm", "myvm.vmx"): filepath.Base(dirB),
+	}
+	for _, c := range got {
+		if c.Name != "myvm" {
+			t.Errorf("discoverVMs entry Name = %q, want %q", c.Name, "myvm")
+		}
+		wantDir, ok := wantDirByVMX[c.VMX]
+		if !ok {
+			t.Errorf("discoverVMs entry VMX = %q, not one of the expected paths", c.VMX)
+			continue
+		}
+		if c.Dir != wantDir {
+			t.Errorf("discoverVMs entry Dir = %q, want %q (the containing search dir's basename)", c.Dir, wantDir)
+		}
 	}
 }
 
