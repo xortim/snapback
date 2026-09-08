@@ -113,6 +113,33 @@ func TestVMAddCmd_FiltersOutAlreadyConfiguredCandidates(t *testing.T) {
 	}
 }
 
+func TestVMAddCmd_PassesDirThroughToCandidates(t *testing.T) {
+	var gotCandidates []tui.VMCandidate
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		searchDirs: func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) {
+			return []discoveredVM{{Name: "new-vm", VMX: "/vms/a/new-vm.vmx", Dir: "Virtual Machines"}}, nil
+		},
+		isTerminal: func(io.Writer) bool { return false },
+		addVMs: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, candidates []tui.VMCandidate) ([]config.VM, error) {
+			gotCandidates = candidates
+			return nil, nil
+		},
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "add", "--config", "/cfg/config.yaml"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(gotCandidates) != 1 || gotCandidates[0].Dir != "Virtual Machines" {
+		t.Errorf("candidates passed to addVMs = %+v, want Dir threaded through from discoveredVM so #48's duplicate-name labeling works from vm add too", gotCandidates)
+	}
+}
+
 func TestVMAddCmd_SearchDirFlag_AppendedAfterDefaults(t *testing.T) {
 	var gotSearchDirs []string
 	deps := vmDeps{
