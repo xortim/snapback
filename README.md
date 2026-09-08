@@ -11,18 +11,18 @@ Go binary you can read, test, and trust.
 
 ## Status
 
-Phase 1 (core CLI) is in progress. The backup choreography (snapshot →
+Phase 1 (core CLI) is complete: the backup choreography (snapshot →
 sync → copy → merge → archive → checksum), config loading, and the
 `VMController` interface — with both a fake for unit tests and a real
-`vmcli`-backed implementation — are implemented; `run` and `list` are
-wired up to that choreography, `init` is an interactive config bootstrap
-(discovers VMs, prompts for destination/retention, writes config.yaml)
-that doesn't touch the choreography itself, while `status` is still
-scaffolded, returning "not yet implemented". `cleanup` is implemented —
-it finds and removes any `snapback-<timestamp>` snapshot orphaned by a
-`run` that died mid-choreography, and is serialized against `run` via a
-per-VM lock so the two can never touch the same VM's snapshots at once.
-See
+`vmcli`-backed implementation — are implemented; `run`, `list`, and
+`status` are wired up to that choreography, `init` is an interactive
+`huh`-driven config bootstrap (discovers VMs, prompts for
+destination/retention, writes config.yaml), and `vm add`/`vm remove
+<name>` edit an existing config without re-running the whole wizard.
+`cleanup` finds and removes any `snapback-<timestamp>` snapshot orphaned
+by a `run` that died mid-choreography, and is serialized against `run`
+via a per-VM lock so the two can never touch the same VM's snapshots at
+once. Current work is the optional TUI layer's remaining polish. See
 [`docs/design.md`](docs/design.md) for the full ADR — architecture,
 choreography, config schema, risks, and the open questions still worth
 verifying locally.
@@ -110,7 +110,7 @@ SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, need
 
 ## Roadmap
 
-- [ ] Phase 1 — Core CLI (`init`, `run`, `list`, `status`), single VM at a time
+- [x] Phase 1 — Core CLI (`init`, `run`, `list`, `status`), single VM at a time
 - [ ] Phase 2 — `launchd` scheduling, orphaned-snapshot cleanup
 - [ ] Phase 3 — Restore workflow, manifest-driven integrity check
 - [ ] Phase 4 — xbar plugin

@@ -21,12 +21,13 @@ validation in `config.Load`, and `init` (interactive config bootstrap —
 discovers VMs by scanning `~/Virtual Machines`, prompts for
 destination/retention, writes `config.yaml`).
 
-Not yet wired up: `internal/cli/root.go`'s `status` command still just
-returns "not yet implemented" — connecting it to the choreography engine
-is the remaining phase-1 work, along with the `cleanup` command, which
-doesn't exist yet at all. Per the tracker, that's the open sub-issues
-under the epic (#1 "Phase 1 — Core CLI"): #9 `status`, #10 `cleanup`.
-#17 (an optional TUI layer) is open but explicitly optional for v1.
+`status` (terminal output only, PR #40) and `cleanup` (PR #38) have
+since landed too, closing out every named sub-issue under the epic (#1
+"Phase 1 — Core CLI"). Current work is #17, the optional TUI layer:
+`init` is now an interactive `huh` wizard (PR #51), plus a small backlog
+of follow-ups filed after its first real-world use (#47–#49, #52–#54),
+including `vm add`/`vm remove <name>` for editing an existing config
+without re-running the whole wizard.
 
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
@@ -142,7 +143,7 @@ with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
 Command surface (`docs/design.md#command-reference`): `init`, `run
 --vm <name>` / `run --all`, `list`, `restore <archive-id>` (never
 overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
-`status --xbar`, `prune`, `cleanup`.
+`status --xbar`, `prune`, `cleanup`, `vm add`, `vm remove <name>`.
 
 ## Known gotchas worth carrying into implementation
 
