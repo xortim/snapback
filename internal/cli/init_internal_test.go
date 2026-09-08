@@ -31,6 +31,7 @@ func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writt
 	return initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return candidates, nil },
+		loadConfig:  func(string) (*config.Config, error) { return nil, errBoom },
 		marshal:     config.Marshal,
 		writeFile: func(path string, data []byte) error {
 			*writtenPath = path
@@ -39,7 +40,7 @@ func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writt
 		},
 		fileExists: func(string) bool { return exists },
 		isTerminal: func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			return cfg, nil
 		},
 	}
@@ -115,11 +116,12 @@ func TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging(t *testin
 			<-blockUntilCancelled // stands in for a scan stalled on an unresponsive volume
 			return nil, nil
 		},
+		loadConfig: func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:    config.Marshal,
 		writeFile:  func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists: func(string) bool { return false },
 		isTerminal: func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			t.Fatal("runWizard should not be called")
 			return nil, nil
 		},
@@ -145,11 +147,12 @@ func TestInitCmd_DiscoverVMsError_IsWrapped(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, errBoom },
+		loadConfig:  func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists:  func(string) bool { return false },
 		isTerminal:  func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			t.Fatal("runWizard should not be called")
 			return nil, nil
 		},
@@ -203,11 +206,12 @@ func TestInitCmd_PassesDiscoveredCandidatesToWizard(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return []discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, nil },
+		loadConfig:  func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { return nil },
 		fileExists:  func(string) bool { return false },
 		isTerminal:  func(io.Writer) bool { return false },
-		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, candidates []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, candidates []tui.VMCandidate, _ *config.Config) (*config.Config, error) {
 			gotCandidates = candidates
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
@@ -235,11 +239,12 @@ func TestInitCmd_SearchDirFlag_AppendedAfterDefaults(t *testing.T) {
 			gotSearchDirs = dirs
 			return nil, nil
 		},
+		loadConfig: func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:    config.Marshal,
 		writeFile:  func(string, []byte) error { return nil },
 		fileExists: func(string) bool { return false },
 		isTerminal: func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
 	}
@@ -273,11 +278,12 @@ func TestInitCmd_NoSearchDirFlag_UsesOnlyDefaults(t *testing.T) {
 			gotSearchDirs = dirs
 			return nil, nil
 		},
+		loadConfig: func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:    config.Marshal,
 		writeFile:  func(string, []byte) error { return nil },
 		fileExists: func(string) bool { return false },
 		isTerminal: func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
 	}
@@ -301,12 +307,13 @@ func TestInitCmd_BothStdoutAndStdinAreTerminals_UsesNonAccessibleMode(t *testing
 	deps := initDeps{
 		searchDirs:   func() []string { return nil },
 		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:   func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:      config.Marshal,
 		writeFile:    func(string, []byte) error { return nil },
 		fileExists:   func(string) bool { return false },
 		isTerminal:   func(io.Writer) bool { return true },
 		isTerminalIn: func(io.Reader) bool { return true },
-		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate, _ *config.Config) (*config.Config, error) {
 			gotAccessible = accessible
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
@@ -337,12 +344,13 @@ func TestInitCmd_StdoutTerminalButStdinNot_UsesAccessibleMode(t *testing.T) {
 	deps := initDeps{
 		searchDirs:   func() []string { return nil },
 		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:   func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:      config.Marshal,
 		writeFile:    func(string, []byte) error { return nil },
 		fileExists:   func(string) bool { return false },
 		isTerminal:   func(io.Writer) bool { return true },
 		isTerminalIn: func(io.Reader) bool { return false },
-		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate, _ *config.Config) (*config.Config, error) {
 			gotAccessible = accessible
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
@@ -372,12 +380,13 @@ func TestInitCmd_NilIsTerminalIn_TreatedAsNotATerminal(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { return nil },
 		fileExists:  func(string) bool { return false },
 		isTerminal:  func(io.Writer) bool { return true },
 		// isTerminalIn intentionally left nil.
-		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate, _ *config.Config) (*config.Config, error) {
 			gotAccessible = accessible
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
@@ -401,11 +410,12 @@ func TestInitCmd_WizardError_IsPropagatedUnwrapped(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists:  func(string) bool { return false },
 		isTerminal:  func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			return nil, errBoom
 		},
 	}
@@ -439,6 +449,108 @@ func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
 	}
 	if written == nil {
 		t.Errorf("writeFile was not called, want --force to allow the write")
+	}
+}
+
+func TestInitCmd_Force_ExistingConfig_PassesPriorToWizard(t *testing.T) {
+	existing := &config.Config{Destination: "/existing/dest", Compression: "gzip"}
+	var gotPrior *config.Config
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { return existing, nil },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { return nil },
+		fileExists:  func(string) bool { return true },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, _ []tui.VMCandidate, prior *config.Config) (*config.Config, error) {
+			gotPrior = prior
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotPrior != existing {
+		t.Errorf("prior passed to runWizard = %+v, want the loaded existing config %+v", gotPrior, existing)
+	}
+}
+
+func TestInitCmd_Force_NoExistingConfig_PriorIsNilAndLoadConfigNotCalled(t *testing.T) {
+	var gotPrior *config.Config
+	priorWasNonNil := false
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig: func(string) (*config.Config, error) {
+			t.Fatal("loadConfig should not be called when no config exists")
+			return nil, nil
+		},
+		marshal:    config.Marshal,
+		writeFile:  func(string, []byte) error { return nil },
+		fileExists: func(string) bool { return false },
+		isTerminal: func(io.Writer) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, _ []tui.VMCandidate, prior *config.Config) (*config.Config, error) {
+			gotPrior = prior
+			priorWasNonNil = prior != nil
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if priorWasNonNil {
+		t.Errorf("prior passed to runWizard = %+v, want nil when --force is used but no config exists yet", gotPrior)
+	}
+}
+
+func TestInitCmd_Force_LoadConfigError_FallsBackToNilPriorWithNote(t *testing.T) {
+	var gotPrior *config.Config
+	priorWasNonNil := false
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { return nil, errBoom },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { return nil },
+		fileExists:  func(string) bool { return true },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, _ []tui.VMCandidate, prior *config.Config) (*config.Config, error) {
+			gotPrior = prior
+			priorWasNonNil = prior != nil
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want a failed prefill load not to abort init", err)
+	}
+	if priorWasNonNil {
+		t.Errorf("prior passed to runWizard = %+v, want nil when loading the existing config fails", gotPrior)
+	}
+	if !strings.Contains(errOut.String(), errBoom.Error()) {
+		t.Errorf("stderr = %q, want it to note the failed prefill load", errOut.String())
 	}
 }
 
@@ -478,11 +590,12 @@ func TestInitCmd_WriteFileError_IsWrapped(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { return errBoom },
 		fileExists:  func(string) bool { return false },
 		isTerminal:  func(io.Writer) bool { return false },
-		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
 			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
 		},
 	}

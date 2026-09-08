@@ -115,7 +115,7 @@ func TestPromptCoreSettings_AcceptsAllDefaults(t *testing.T) {
 	in := strings.NewReader("\n\n\n\n\n\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err != nil {
 		t.Fatalf("promptCoreSettings() error = %v", err)
 	}
@@ -132,6 +132,38 @@ func TestPromptCoreSettings_AcceptsAllDefaults(t *testing.T) {
 	}
 }
 
+func TestPromptCoreSettings_PriorConfig_SeedsDefaultsInsteadOfHardcodedConstants(t *testing.T) {
+	// One blank line per field accepts whatever's pre-filled -- if prior
+	// weren't wired through, these blanks would resolve to the hardcoded
+	// defaultDestination/defaultCompression/etc. constants instead.
+	in := strings.NewReader("\n\n\n\n\n\n")
+	var out bytes.Buffer
+	prior := &config.Config{
+		Destination: "/existing/dest",
+		Compression: "gzip",
+		Retention:   config.Retention{KeepLast: 1, KeepDaily: 2, KeepWeekly: 3},
+		Notifications: config.Notifications{
+			Enabled: false,
+		},
+	}
+
+	got, err := promptCoreSettings(context.Background(), in, &out, true, prior)
+	if err != nil {
+		t.Fatalf("promptCoreSettings() error = %v", err)
+	}
+	want := coreSettings{
+		destination: "/existing/dest",
+		compression: "gzip",
+		keepLast:    1,
+		keepDaily:   2,
+		keepWeekly:  3,
+		notify:      false,
+	}
+	if got != want {
+		t.Errorf("promptCoreSettings() = %+v, want %+v (seeded from prior config)", got, want)
+	}
+}
+
 func TestPromptCoreSettings_InvalidCompressionChoice_Reprompts(t *testing.T) {
 	// destination blank, compression: a non-numeric answer (Select's
 	// accessible mode only accepts a number) then "2" (gzip is the
@@ -139,7 +171,7 @@ func TestPromptCoreSettings_InvalidCompressionChoice_Reprompts(t *testing.T) {
 	in := strings.NewReader("\nbogus\n2\n\n\n\n\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err != nil {
 		t.Fatalf("promptCoreSettings() error = %v", err)
 	}
@@ -157,7 +189,7 @@ func TestPromptCoreSettings_InvalidRetentionCount_Reprompts(t *testing.T) {
 	in := strings.NewReader("\n\nnotanumber\n3\n\n\n\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err != nil {
 		t.Fatalf("promptCoreSettings() error = %v", err)
 	}
@@ -175,7 +207,7 @@ func TestPromptCoreSettings_InvalidNotifyAnswer_Reprompts(t *testing.T) {
 	in := strings.NewReader("\n\n\n\n\nmaybe\nn\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err != nil {
 		t.Fatalf("promptCoreSettings() error = %v", err)
 	}
@@ -196,7 +228,7 @@ func TestPromptCoreSettings_InvalidRetentionThenEOF_ReturnsError(t *testing.T) {
 	in := strings.NewReader("\n\nnotanumber\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err == nil {
 		t.Fatalf("promptCoreSettings() = %+v, err = nil, want an error for an invalid value followed by EOF", got)
 	}
@@ -216,7 +248,7 @@ func TestPromptCoreSettings_UnwritableDestination_Reprompts(t *testing.T) {
 	in := strings.NewReader(filepath.Join(dir, "backups") + "\n" + filepath.Join(writable, "backups") + "\n\n\n\n\n\n")
 	var out bytes.Buffer
 
-	got, err := promptCoreSettings(context.Background(), in, &out, true)
+	got, err := promptCoreSettings(context.Background(), in, &out, true, nil)
 	if err != nil {
 		t.Fatalf("promptCoreSettings() error = %v", err)
 	}
@@ -402,7 +434,7 @@ func TestRunInitWizard_EndToEnd_DiscoveredVMWithDefaults(t *testing.T) {
 	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n\n")
 	var out bytes.Buffer
 
-	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
 	if err != nil {
 		t.Fatalf("RunInitWizard() error = %v", err)
 	}
@@ -430,7 +462,7 @@ func TestRunInitWizard_DuplicateVMName_FailsBeforeCoreSettings(t *testing.T) {
 	in := strings.NewReader("0\ny\ndev\n/vms/other.vmx\nn\n")
 	var out bytes.Buffer
 
-	_, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	_, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
 	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("RunInitWizard() error = %v, want it to mention \"invalid VM selection\" and \"duplicate\"", err)
 	}
@@ -448,7 +480,7 @@ func TestRunInitWizard_EmptyReader_ReturnsError(t *testing.T) {
 	in := strings.NewReader("")
 	var out bytes.Buffer
 
-	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
 	if err == nil {
 		t.Fatalf("RunInitWizard() = %+v, err = nil, want an error for a completely empty reader", cfg)
 	}
@@ -473,7 +505,7 @@ func TestRunInitWizard_DeclinedAtReview_ReturnsAbortedError(t *testing.T) {
 	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\nn\n")
 	var out bytes.Buffer
 
-	_, err := RunInitWizard(context.Background(), in, &out, true, candidates)
+	_, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
 	if err == nil || !strings.Contains(err.Error(), "aborted") {
 		t.Fatalf("RunInitWizard() error = %v, want an \"aborted\" error", err)
 	}
