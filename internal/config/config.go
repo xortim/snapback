@@ -50,14 +50,14 @@ func Load(path string) (*Config, error) {
 		return nil, fmt.Errorf("parse %s: %w", path, err)
 	}
 
-	expandedDest, err := expandTilde(cfg.Destination)
+	expandedDest, err := ExpandTilde(cfg.Destination)
 	if err != nil {
 		return nil, fmt.Errorf("parse %s: expand destination: %w", path, err)
 	}
 	cfg.Destination = expandedDest
 
 	for i, vm := range cfg.VMs {
-		expandedVMX, err := expandTilde(vm.VMX)
+		expandedVMX, err := ExpandTilde(vm.VMX)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: expand vms[%d].vmx: %w", path, i, err)
 		}

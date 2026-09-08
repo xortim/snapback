@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/tui"
 )
 
 func newTestRootForInit(t *testing.T, deps initDeps) *cobra.Command {
@@ -21,10 +23,11 @@ func newTestRootForInit(t *testing.T, deps initDeps) *cobra.Command {
 }
 
 // fakeInitDeps returns an initDeps whose writeFile captures its argument
-// into written, and whose fileExists/discoverVMs are controlled by the
-// caller -- covers the common case where a test only cares about what
-// init would have written, not real disk I/O.
-func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writtenPath *string) initDeps {
+// into written, and whose fileExists/discoverVMs/runWizard are
+// controlled by the caller -- covers the common case where a test only
+// cares about what init would have written, not real disk I/O or
+// prompting.
+func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writtenPath *string, cfg *config.Config) initDeps {
 	return initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return candidates, nil },
@@ -35,6 +38,10 @@ func fakeInitDeps(candidates []discoveredVM, exists bool, written *[]byte, writt
 			return nil
 		},
 		fileExists: func(string) bool { return exists },
+		isTerminal: func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			return cfg, nil
+		},
 	}
 }
 
@@ -80,119 +87,10 @@ func TestConfigFileExists(t *testing.T) {
 	}
 }
 
-func TestInitCmd_WritesConfigFromDiscoveredVMAndDefaults(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// One blank line per prompt, in order: VM selection, add-more-manually,
-	// destination, compression, keep_last, keep_daily, keep_weekly,
-	// notifications -- every prompt accepts its default.
-	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n\n"))
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	if writtenPath != "/cfg/config.yaml" {
-		t.Errorf("writeFile path = %q, want %q", writtenPath, "/cfg/config.yaml")
-	}
-	got := string(written)
-	for _, want := range []string{"name: dev", "vmx: /vms/dev.vmwarevm/dev.vmx", "destination: /Volumes/Backups/snapback", "compression: zstd"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("written config = %q, want it to contain %q", got, want)
-		}
-	}
-	if !strings.Contains(out.String(), "wrote config to /cfg/config.yaml") {
-		t.Errorf("stdout = %q, want a confirmation naming the config path", out.String())
-	}
-}
-
-func TestInitCmd_DiscoveredVMs_CanAlsoAddManually(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// select the discovered VM, opt into manual entry, add "renamed" (a VM
-	// discovery can't see because its bundle was renamed after creation),
-	// blank name to stop manual entry, then defaults for the rest.
-	root.SetIn(strings.NewReader("\n" + "y\n" + "renamed\n/vms/renamed.vmwarevm/renamed.vmx\n\n" + "\n\n\n\n\n\n"))
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	got := string(written)
-	if !strings.Contains(got, "name: dev") {
-		t.Errorf("written config = %q, want the discovered dev VM", got)
-	}
-	if !strings.Contains(got, "name: renamed") || !strings.Contains(got, "vmx: /vms/renamed.vmwarevm/renamed.vmx") {
-		t.Errorf("written config = %q, want the manually-added renamed VM", got)
-	}
-}
-
-func TestInitCmd_NoDiscoveredVMs_PromptsManualEntry(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// name "devbox", vmx "/vms/devbox.vmx", blank name to stop manual
-	// entry, then defaults for destination/compression/retention/notify
-	// (7 more blank lines: destination, compression, keep_last,
-	// keep_daily, keep_weekly, notifications).
-	root.SetIn(strings.NewReader("devbox\n/vms/devbox.vmx\n\n\n\n\n\n\n\n"))
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v", err)
-	}
-	got := string(written)
-	if !strings.Contains(got, "name: devbox") || !strings.Contains(got, "vmx: /vms/devbox.vmx") {
-		t.Errorf("written config = %q, want the manually-entered devbox VM", got)
-	}
-}
-
-func TestInitCmd_DuplicateVMSelection_FailsBeforeRemainingPrompts(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps([]discoveredVM{
-		{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"},
-	}, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// Select the one candidate twice. If init deferred validation to the
-	// end, it would next try to read the destination prompt, find no more
-	// input, and fail with an "unexpected end of input" error instead --
-	// this test only passes if the duplicate is caught immediately after
-	// selection.
-	root.SetIn(strings.NewReader("1,1\n"))
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "invalid VM selection") || !strings.Contains(err.Error(), "duplicate") {
-		t.Fatalf("Execute() error = %v, want an error wrapped as \"invalid VM selection\" mentioning \"duplicate\"", err)
-	}
-	if written != nil {
-		t.Errorf("writeFile was called, want init to fail before writing")
-	}
-}
-
 func TestInitCmd_ExistingConfig_WithoutForce_Errors(t *testing.T) {
 	var written []byte
 	var writtenPath string
-	deps := fakeInitDeps(nil, true, &written, &writtenPath)
+	deps := fakeInitDeps(nil, true, &written, &writtenPath, &config.Config{Destination: "/dest", Compression: "zstd"})
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
@@ -209,146 +107,6 @@ func TestInitCmd_ExistingConfig_WithoutForce_Errors(t *testing.T) {
 	}
 }
 
-func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, true, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
-	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n\n"))
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want --force to allow overwriting", err)
-	}
-	if written == nil {
-		t.Errorf("writeFile was not called, want --force to allow the write")
-	}
-}
-
-func TestInitCmd_InvalidCompressionChoice_Reprompts(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// blank name to skip manual VM entry, blank destination, an invalid
-	// compression choice, then a valid one -- followed by defaults for
-	// the remaining prompts (keep_last, keep_daily, keep_weekly, notify).
-	root.SetIn(strings.NewReader("\n\nbogus\ngzip\n\n\n\n\n"))
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
-	}
-	if !strings.Contains(out.String(), `"bogus" is not one of`) {
-		t.Errorf("stdout = %q, want it to explain the invalid choice before re-prompting", out.String())
-	}
-	if !strings.Contains(string(written), "compression: gzip") {
-		t.Errorf("written config = %q, want the retried valid choice", written)
-	}
-}
-
-func TestInitCmd_InvalidRetentionCount_Reprompts(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// blank name, blank destination, blank compression, invalid keep_last,
-	// then a valid one, then defaults for keep_daily/keep_weekly/notify.
-	root.SetIn(strings.NewReader("\n\n\nnotanumber\n3\n\n\n\n"))
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
-	}
-	if !strings.Contains(out.String(), `"notanumber" is not a whole number`) {
-		t.Errorf("stdout = %q, want it to explain the invalid count before re-prompting", out.String())
-	}
-	if !strings.Contains(string(written), "keep_last: 3") {
-		t.Errorf("written config = %q, want the retried valid count", written)
-	}
-}
-
-func TestInitCmd_InvalidYesNoAnswer_Reprompts(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// blank name, blank destination, blank compression, blank retention x3,
-	// invalid notify answer, then a valid one.
-	root.SetIn(strings.NewReader("\n\n\n\n\n\nmaybe\nn\n"))
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want nil after a valid retry", err)
-	}
-	if !strings.Contains(out.String(), `"maybe" is not y/n`) {
-		t.Errorf("stdout = %q, want it to explain the invalid answer before re-prompting", out.String())
-	}
-	if !strings.Contains(string(written), "enabled: false") {
-		t.Errorf("written config = %q, want the retried valid answer", written)
-	}
-}
-
-func TestInitCmd_InvalidChoiceThenEOF_Errors(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// blank name, blank destination, invalid compression, then input runs
-	// out -- the re-prompt itself must still hard-fail on a genuinely
-	// unrecoverable read, not loop forever.
-	root.SetIn(strings.NewReader("\n\nbogus\n"))
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	err := root.Execute()
-	if err == nil || !strings.Contains(err.Error(), "read input") {
-		t.Fatalf("Execute() error = %v, want a read-input error once retry input is exhausted", err)
-	}
-}
-
-func TestInitCmd_ContextCancelled_StopsPromptingInsteadOfHanging(t *testing.T) {
-	var written []byte
-	var writtenPath string
-	deps := fakeInitDeps(nil, false, &written, &writtenPath)
-
-	root := newTestRootForInit(t, deps)
-	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	// A pipe with no writer blocks Scan() forever, standing in for a real
-	// terminal that's still waiting on the user -- the only way this test
-	// completes is if cancelling ctx actually interrupts the prompt.
-	pr, pw := io.Pipe()
-	t.Cleanup(func() { _ = pw.Close() })
-	root.SetIn(pr)
-	root.SetOut(&bytes.Buffer{})
-	root.SetErr(&bytes.Buffer{})
-
-	ctx, cancel := context.WithCancel(context.Background())
-	time.AfterFunc(20*time.Millisecond, cancel)
-
-	err := root.ExecuteContext(ctx)
-	if err == nil || !strings.Contains(err.Error(), "init cancelled") {
-		t.Fatalf("ExecuteContext() error = %v, want an \"init cancelled\" error instead of hanging", err)
-	}
-}
-
 func TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging(t *testing.T) {
 	blockUntilCancelled := make(chan struct{})
 	deps := initDeps{
@@ -360,6 +118,11 @@ func TestInitCmd_ContextCancelledDuringDiscovery_StopsInsteadOfHanging(t *testin
 		marshal:    config.Marshal,
 		writeFile:  func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists: func(string) bool { return false },
+		isTerminal: func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			t.Fatal("runWizard should not be called")
+			return nil, nil
+		},
 	}
 
 	root := newTestRootForInit(t, deps)
@@ -385,6 +148,11 @@ func TestInitCmd_DiscoverVMsError_IsWrapped(t *testing.T) {
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			t.Fatal("runWizard should not be called")
+			return nil, nil
+		},
 	}
 
 	root := newTestRootForInit(t, deps)
@@ -399,6 +167,244 @@ func TestInitCmd_DiscoverVMsError_IsWrapped(t *testing.T) {
 	}
 }
 
+func TestInitCmd_WritesWizardResult(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{
+		Destination: "/dest",
+		Compression: "zstd",
+		VMs:         []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}},
+	}
+	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, false, &written, &writtenPath, cfg)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if writtenPath != "/cfg/config.yaml" {
+		t.Errorf("writeFile path = %q, want %q", writtenPath, "/cfg/config.yaml")
+	}
+	if !strings.Contains(string(written), "name: dev") {
+		t.Errorf("written config = %q, want the wizard's result marshaled", written)
+	}
+	if !strings.Contains(out.String(), "wrote config to /cfg/config.yaml") {
+		t.Errorf("stdout = %q, want a confirmation naming the config path", out.String())
+	}
+}
+
+func TestInitCmd_PassesDiscoveredCandidatesToWizard(t *testing.T) {
+	var gotCandidates []tui.VMCandidate
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return []discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, nil },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { return nil },
+		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, candidates []tui.VMCandidate) (*config.Config, error) {
+			gotCandidates = candidates
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if len(gotCandidates) != 1 || gotCandidates[0].Name != "dev" || gotCandidates[0].VMX != "/vms/dev.vmx" {
+		t.Errorf("candidates passed to runWizard = %+v, want the one discovered VM converted to tui.VMCandidate", gotCandidates)
+	}
+}
+
+func TestInitCmd_BothStdoutAndStdinAreTerminals_UsesNonAccessibleMode(t *testing.T) {
+	var gotAccessible bool
+	deps := initDeps{
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return true },
+		isTerminalIn: func(io.Reader) bool { return true },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+			gotAccessible = accessible
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if gotAccessible {
+		t.Error("accessible = true, want false when both stdout and stdin are real terminals")
+	}
+}
+
+// TestInitCmd_StdoutTerminalButStdinNot_UsesAccessibleMode reproduces
+// finding 3 from the whole-branch review: `snapback init < answers.txt`
+// run at an actual terminal has a real tty stdout but a redirected-file
+// stdin. The old check only tested stdout, so this combination wrongly
+// kept the rich interactive bubbletea path, which can't read a
+// non-terminal stdin correctly.
+func TestInitCmd_StdoutTerminalButStdinNot_UsesAccessibleMode(t *testing.T) {
+	var gotAccessible bool
+	deps := initDeps{
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return true },
+		isTerminalIn: func(io.Reader) bool { return false },
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+			gotAccessible = accessible
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !gotAccessible {
+		t.Error("accessible = false, want true when stdin is not a real terminal, even though stdout is")
+	}
+}
+
+// TestInitCmd_NilIsTerminalIn_TreatedAsNotATerminal mirrors the existing
+// nil-isTerminal behavior: a nil isTerminalIn (as every other existing
+// initDeps literal in this file now has, by omission) must behave like
+// "not a terminal", keeping every one of those tests on the accessible
+// path they were already exercising.
+func TestInitCmd_NilIsTerminalIn_TreatedAsNotATerminal(t *testing.T) {
+	var gotAccessible bool
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { return nil },
+		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return true },
+		// isTerminalIn intentionally left nil.
+		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, accessible bool, _ []tui.VMCandidate) (*config.Config, error) {
+			gotAccessible = accessible
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !gotAccessible {
+		t.Error("accessible = false, want true when isTerminalIn is nil")
+	}
+}
+
+func TestInitCmd_WizardError_IsPropagatedUnwrapped(t *testing.T) {
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		marshal:     config.Marshal,
+		writeFile:   func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
+		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			return nil, errBoom
+		},
+	}
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("Execute() error = %v, want it to be (or wrap) %v", err, errBoom)
+	}
+}
+
+func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{Destination: "/dest", Compression: "zstd", VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}}
+	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, true, &written, &writtenPath, cfg)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want --force to allow overwriting", err)
+	}
+	if written == nil {
+		t.Errorf("writeFile was not called, want --force to allow the write")
+	}
+}
+
+// TestInitCmd_ZeroVMConfig_WarnsButStillWrites reproduces finding 4 from
+// the whole-branch review: the old hand-rolled prompter printed a
+// warning to stderr when the user finished with zero VMs configured
+// (config.ValidateVMs doesn't reject an empty list, so this was never a
+// hard failure -- just a warning that a resulting `snapback run --all`
+// would have nothing to do). That warning was dropped when the wizard
+// rewrite happened.
+func TestInitCmd_ZeroVMConfig_WarnsButStillWrites(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{Destination: "/dest", Compression: "zstd"} // no VMs
+	deps := fakeInitDeps(nil, false, &written, &writtenPath, cfg)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want the zero-VM config to still be written", err)
+	}
+	wantWarning := "warning: no VMs configured; `snapback run --all` will have nothing to back up"
+	if !strings.Contains(errOut.String(), wantWarning) {
+		t.Errorf("stderr = %q, want it to contain %q", errOut.String(), wantWarning)
+	}
+	if written == nil {
+		t.Error("writeFile was not called, want the zero-VM config to still be written (this is a warning, not a hard failure)")
+	}
+}
+
 func TestInitCmd_WriteFileError_IsWrapped(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
@@ -406,11 +412,15 @@ func TestInitCmd_WriteFileError_IsWrapped(t *testing.T) {
 		marshal:     config.Marshal,
 		writeFile:   func(string, []byte) error { return errBoom },
 		fileExists:  func(string) bool { return false },
+		isTerminal:  func(io.Writer) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		},
 	}
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
-	root.SetIn(strings.NewReader("\n\n\n\n\n\n\n"))
+	root.SetIn(&bytes.Buffer{})
 	root.SetOut(&bytes.Buffer{})
 	root.SetErr(&bytes.Buffer{})
 

@@ -9,12 +9,12 @@ func TestExpandTilde_ExpandsBareTilde(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := expandTilde("~")
+	got, err := ExpandTilde("~")
 	if err != nil {
-		t.Fatalf("expandTilde(\"~\") error = %v", err)
+		t.Fatalf("ExpandTilde(\"~\") error = %v", err)
 	}
 	if got != home {
-		t.Errorf("expandTilde(\"~\") = %q, want %q", got, home)
+		t.Errorf("ExpandTilde(\"~\") = %q, want %q", got, home)
 	}
 }
 
@@ -22,32 +22,32 @@ func TestExpandTilde_ExpandsTildeSlashPrefix(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
-	got, err := expandTilde("~/Virtual Machines/dev.vmwarevm/dev.vmx")
+	got, err := ExpandTilde("~/Virtual Machines/dev.vmwarevm/dev.vmx")
 	if err != nil {
 		t.Fatalf("expandTilde error = %v", err)
 	}
 	want := filepath.Join(home, "Virtual Machines/dev.vmwarevm/dev.vmx")
 	if got != want {
-		t.Errorf("expandTilde(...) = %q, want %q", got, want)
+		t.Errorf("ExpandTilde(...) = %q, want %q", got, want)
 	}
 }
 
 func TestExpandTilde_LeavesAbsolutePathUnchanged(t *testing.T) {
-	got, err := expandTilde("/Volumes/Backups/snapback")
+	got, err := ExpandTilde("/Volumes/Backups/snapback")
 	if err != nil {
 		t.Fatalf("expandTilde error = %v", err)
 	}
 	if got != "/Volumes/Backups/snapback" {
-		t.Errorf("expandTilde(absolute) = %q, want it unchanged", got)
+		t.Errorf("ExpandTilde(absolute) = %q, want it unchanged", got)
 	}
 }
 
 func TestExpandTilde_LeavesOtherUserTildeUnchanged(t *testing.T) {
-	got, err := expandTilde("~otheruser/foo")
+	got, err := ExpandTilde("~otheruser/foo")
 	if err != nil {
 		t.Fatalf("expandTilde error = %v", err)
 	}
 	if got != "~otheruser/foo" {
-		t.Errorf("expandTilde(~otheruser/foo) = %q, want it unchanged (this package only resolves the current user's home)", got)
+		t.Errorf("ExpandTilde(~otheruser/foo) = %q, want it unchanged (this package only resolves the current user's home)", got)
 	}
 }

@@ -44,6 +44,23 @@ func defaultIsTerminal(w io.Writer) bool {
 	return term.IsTerminal(int(f.Fd()))
 }
 
+// defaultIsTerminalIn is defaultIsTerminal's read-side counterpart: only
+// *os.File can be a terminal, so any other io.Reader (a *bytes.Buffer or
+// strings.Reader in tests, a pipe, redirected-from-file input) is not.
+// internal/cli/init.go uses this alongside defaultIsTerminal -- a real
+// bubbletea program needs both a real terminal stdout to render into and
+// a real terminal stdin to read raw keypresses from; either one being
+// something else (e.g. `snapback init < answers.txt` run at an actual
+// terminal, where stdout is a tty but stdin is a redirected file) means
+// the rich interactive path can't work.
+func defaultIsTerminalIn(r io.Reader) bool {
+	f, ok := r.(*os.File)
+	if !ok {
+		return false
+	}
+	return term.IsTerminal(int(f.Fd()))
+}
+
 func defaultRunDeps() runDeps {
 	base := defaultVMCmdDeps()
 	return runDeps{
