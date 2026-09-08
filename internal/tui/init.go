@@ -114,11 +114,13 @@ func isCancellation(ctx context.Context, err error) bool {
 	return ctx.Err() != nil || errors.Is(err, huh.ErrUserAborted)
 }
 
-// Defaults match internal/cli/init.go's old plain prompter, kept
-// identical so a fresh `snapback init` proposes the same values as
-// before this rewrite.
+// defaultDestination lives under the user's home directory rather than
+// /Volumes (an external/network mount root, not a general-purpose
+// writable directory -- see #49): that guarantees it's writable on a
+// completely fresh run with no drive attached, and it's picked up by
+// Time Machine's default whole-disk backup policy for free.
 const (
-	defaultDestination = "/Volumes/Backups/snapback"
+	defaultDestination = "~/Backups/snapback"
 	defaultCompression = "zstd"
 	defaultKeepLast    = 5
 	defaultKeepDaily   = 7

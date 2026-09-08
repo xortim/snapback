@@ -28,12 +28,11 @@ func TestValidateWritableDestination_NoExistingAncestor_ReturnsError(t *testing.
 }
 
 func TestValidateWritableDestination_MountRootAncestor_ReturnsNilDespiteBeingUnwritable(t *testing.T) {
-	// Reproduces the wizard's own defaultDestination
-	// (/Volumes/Backups/snapback) rejecting itself on a fresh run with the
-	// backup drive unmounted: the walk finds no existing "Backups"
-	// subdirectory and lands on the mount root itself, which is
-	// unwritable by design. volumesMountRoot is swapped for a dir this
-	// test controls since the real /Volumes doesn't exist on the
+	// Reproduces a destination typed under an unmounted backup drive's
+	// mountpoint (e.g. /Volumes/Backups/snapback): the walk finds no
+	// existing "Backups" subdirectory and lands on the mount root itself,
+	// which is unwritable by design. volumesMountRoot is swapped for a
+	// dir this test controls since the real /Volumes doesn't exist on the
 	// ubuntu-latest CI runner (see volumesMountRoot's doc comment).
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o500); err != nil {

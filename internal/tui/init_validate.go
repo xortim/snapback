@@ -61,11 +61,10 @@ func validateWritableDestination(path string) error {
 	// meant to write into /Volumes itself: an attached drive appears as a
 	// writable directory *under* it. An unmounted backup drive makes its
 	// own not-yet-existing mountpoint invisible to the os.Stat walk above,
-	// which then lands here instead -- including for this wizard's own
-	// defaultDestination (/Volumes/Backups/snapback) on a completely fresh
-	// run, before the drive is even plugged in. Treat landing exactly on
-	// the mount root as "can't verify yet" rather than a hard failure, so
-	// accepting the pre-filled default doesn't reject itself.
+	// which then lands here instead -- e.g. a user typing a destination
+	// under /Volumes before the drive is even plugged in. Treat landing
+	// exactly on the mount root as "can't verify yet" rather than a hard
+	// failure, so that case doesn't reject outright.
 	if dir == volumesMountRoot {
 		return nil
 	}
