@@ -51,6 +51,7 @@ func newVMCmd() *cobra.Command {
 }
 
 func newVMAddCmdWithDeps(deps vmDeps) *cobra.Command {
+	var extraSearchDirs []string
 	cmd := &cobra.Command{
 		Use:   "add",
 		Short: "Discover and add new VMs to an existing config",
@@ -58,19 +59,26 @@ func newVMAddCmdWithDeps(deps vmDeps) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cmd.SilenceUsage = true
-			return runVMAdd(cmd, deps)
+			return runVMAdd(cmd, deps, extraSearchDirs)
 		},
 	}
+	cmd.Flags().StringArrayVar(&extraSearchDirs, "search-dir", nil, "additional directory to scan for VMs, alongside the defaults (repeatable)")
 	return cmd
 }
 
-func runVMAdd(cmd *cobra.Command, deps vmDeps) error {
+func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 	cfg, configPath, err := loadConfigForCmd(cmd, deps.loadConfig)
 	if err != nil {
 		return err
 	}
 
-	discovered, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, deps.searchDirs())
+	// extraSearchDirs (--search-dir, repeatable) is appended after the
+	// defaults rather than replacing them -- see init's own --search-dir
+	// flag (#47) for why: no persisted vm_search_dirs config field yet,
+	// just the two hardcoded defaults plus whatever's named on the
+	// command line for this one run.
+	searchDirs := append(deps.searchDirs(), extraSearchDirs...)
+	discovered, err := discoverVMsWithContext(cmd.Context(), deps.discoverVMs, searchDirs)
 	if err != nil {
 		return fmt.Errorf("discover VMs: %w", err)
 	}

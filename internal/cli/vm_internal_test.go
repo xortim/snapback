@@ -113,6 +113,34 @@ func TestVMAddCmd_FiltersOutAlreadyConfiguredCandidates(t *testing.T) {
 	}
 }
 
+func TestVMAddCmd_SearchDirFlag_AppendedAfterDefaults(t *testing.T) {
+	var gotSearchDirs []string
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		searchDirs: func() []string { return []string{"/default/a"} },
+		discoverVMs: func(dirs []string) ([]discoveredVM, error) {
+			gotSearchDirs = dirs
+			return nil, nil
+		},
+		isTerminal: func(io.Writer) bool { return false },
+		addVMs: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) ([]config.VM, error) {
+			return nil, nil
+		},
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "add", "--config", "/cfg/config.yaml", "--search-dir", "/extra/one"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	want := []string{"/default/a", "/extra/one"}
+	if len(gotSearchDirs) != len(want) || gotSearchDirs[0] != want[0] || gotSearchDirs[1] != want[1] {
+		t.Errorf("search dirs passed to discoverVMs = %v, want %v", gotSearchDirs, want)
+	}
+}
+
 func TestVMAddCmd_NoneAdded_PrintsMessageWithoutWriting(t *testing.T) {
 	var written []byte
 	var writtenPath string
