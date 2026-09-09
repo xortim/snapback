@@ -15,7 +15,6 @@ func TestWriteManifest_WritesReadableJSON(t *testing.T) {
 		VMName:      "dev-ubuntu",
 		GuestOS:     "ubuntu-64",
 		SizeBytes:   1024,
-		Comment:     "nightly auto-backup",
 		Timestamp:   time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
 		ToolsState:  vm.ToolsRunning,
 		SHA256:      "deadbeef",
@@ -36,7 +35,7 @@ func TestWriteManifest_WritesReadableJSON(t *testing.T) {
 		t.Fatalf("json.Unmarshal() error = %v, want nil", err)
 	}
 	if got.VMName != m.VMName || got.GuestOS != m.GuestOS || got.SizeBytes != m.SizeBytes ||
-		got.Comment != m.Comment || !got.Timestamp.Equal(m.Timestamp) || got.ToolsState != m.ToolsState ||
+		!got.Timestamp.Equal(m.Timestamp) || got.ToolsState != m.ToolsState ||
 		got.SHA256 != m.SHA256 || got.Compression != m.Compression {
 		t.Errorf("round-tripped manifest = %+v, want %+v", got, m)
 	}

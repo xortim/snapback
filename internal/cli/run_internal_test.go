@@ -201,7 +201,7 @@ func TestRunCmd_HappyPath_PrintsArchivePath(t *testing.T) {
 			return &config.Config{
 				Destination: t.TempDir(),
 				Compression: "gzip",
-				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath, CommentTemplate: "nightly"}},
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
 			}, nil
 		},
 		newController: func() (vm.Controller, error) { return fake, nil },

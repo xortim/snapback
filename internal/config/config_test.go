@@ -21,7 +21,6 @@ vms:
   - name: dev-ubuntu
     vmx: /Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
     schedule: "0 2 * * *"
-    comment_template: "nightly auto-backup"
   - name: win-testbed
     vmx: /Users/testuser/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
     schedule: "0 2 * * 0"
@@ -47,10 +46,10 @@ notifications:
 	if len(cfg.VMs) != 2 {
 		t.Fatalf("len(VMs) = %d, want 2", len(cfg.VMs))
 	}
-	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "/Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "0 2 * * *" || cfg.VMs[0].CommentTemplate != "nightly auto-backup" {
+	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "/Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "0 2 * * *" {
 		t.Errorf("VMs[0] = %+v, unexpected", cfg.VMs[0])
 	}
-	if cfg.VMs[1].Name != "win-testbed" || cfg.VMs[1].CommentTemplate != "" {
+	if cfg.VMs[1].Name != "win-testbed" {
 		t.Errorf("VMs[1] = %+v, unexpected", cfg.VMs[1])
 	}
 	if !cfg.Notifications.Enabled {

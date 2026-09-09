@@ -25,10 +25,9 @@ type Retention struct {
 }
 
 type VM struct {
-	Name            string `koanf:"name" yaml:"name"`
-	VMX             string `koanf:"vmx" yaml:"vmx"`
-	Schedule        string `koanf:"schedule" yaml:"schedule,omitempty"`
-	CommentTemplate string `koanf:"comment_template" yaml:"comment_template,omitempty"`
+	Name     string `koanf:"name" yaml:"name"`
+	VMX      string `koanf:"vmx" yaml:"vmx"`
+	Schedule string `koanf:"schedule" yaml:"schedule,omitempty"`
 }
 
 type Notifications struct {

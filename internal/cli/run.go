@@ -116,7 +116,6 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 	opts := backup.Options{
 		VMName:      vmCfg.Name,
 		VMXPath:     vmCfg.VMX,
-		Comment:     vmCfg.CommentTemplate,
 		Destination: cfg.Destination,
 		Compression: cfg.Compression,
 	}

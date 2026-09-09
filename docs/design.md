@@ -77,7 +77,7 @@ The mechanism that actually works, and the one Vimalin uses under the hood: snap
 6. cp -R (or rsync) the .vmwarevm bundle -> staging dir    # copies the frozen base disk + snapshot chain; source untouched by the VM's ongoing writes
 7. vmrun deleteSnapshot <vmx> snapback-<timestamp>         # merges the live delta back into the source, VM never paused
 8. tar + compress the staged copy -> destination
-9. sha256 the archive, write manifest.json (VM name, guest OS, size, comment, timestamp, tools_state)
+9. sha256 the archive, write manifest.json (VM name, guest OS, size, timestamp, tools_state)
 10. rm -rf the staging copy
 11. prune archives beyond retention policy
 12. osascript notification: success/failure
@@ -94,7 +94,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback init [--search-dir <dir>]` | Interactive config bootstrap — discovers VMs by scanning `~/Virtual Machines` and `~/Virtual Machines.localized` for `.vmwarevm` bundles, plus any `--search-dir` given (repeatable), prompts for destination/retention (falls back to manual entry if none are found) |
 | `snapback run --vm <name>`      | On-demand backup of one VM                                                                       |
 | `snapback run --all`            | Backup every VM in config (used by launchd)                                                      |
-| `snapback list`                 | List backup archives with timestamp, size, comment                                               |
+| `snapback list`                 | List backup archives with timestamp, size                                                        |
 | `snapback restore <archive-id>` | Restore to a new `.vmwarevm`, suffixed `- backup yyyy-mm-dd`, never overwrites source            |
 | `snapback status`               | Human-readable status: last run, next scheduled run, disk usage                                  |
 | `snapback status --vm <name>`   | Drill into a single VM: full consistency detail, disk usage, retention policy                    |
@@ -118,7 +118,6 @@ vms:
   - name: dev-ubuntu
     vmx: ~/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
     schedule: "0 2 * * *" # daily 2am, cron syntax, translated to launchd StartCalendarInterval
-    comment_template: "nightly auto-backup"
   - name: win-testbed
     vmx: ~/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
     schedule: "0 2 * * 0" # weekly Sunday 2am

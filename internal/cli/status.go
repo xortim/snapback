@@ -405,15 +405,14 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 	}
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE\tCOMMENT"); err != nil {
+	if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE"); err != nil {
 		return err
 	}
 	for _, a := range vmArchives {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		_, err := fmt.Fprintf(w, "%s\t%s\t%s\n",
 			a.Manifest.Timestamp.Local().Format(time.RFC3339),
 			formatSize(a.Manifest.SizeBytes),
 			archiveStateCell(a.Manifest.ToolsState),
-			sanitizeForTable(a.Manifest.Comment),
 		)
 		if err != nil {
 			return err
