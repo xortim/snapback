@@ -57,7 +57,13 @@ type Result struct {
 // vmware-vmx itself successfully opened the whole chain to get to
 // "running" in the first place. Both of this function's call sites in
 // Run gate on the same toolsState != vm.ToolsRunning check the rest of
-// the choreography already uses to decide crash-consistent vs. quiesced.
+// the choreography already uses to decide crash-consistent vs. quiesced
+// -- as does CheckVMDiskConsistency's own caller outside Run
+// (internal/cli's status command), independently re-implementing the
+// same gate rather than sharing it with Run's, since the two callers
+// check tools state at different points for different reasons (Run:
+// immediately before/after its own snapshot/merge calls; status: once
+// per VM per invocation).
 func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []string) error {
 	var errs []error
 	for _, diskFile := range diskFiles {
