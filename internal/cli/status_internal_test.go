@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/spf13/cobra"
 
@@ -18,6 +19,68 @@ import (
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/vm"
 )
+
+func TestSpliceTitleIntoTopBorder_EmbedsTitleKeepingLength(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 30) + "╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if !strings.Contains(got, "myvm") {
+		t.Errorf("got %q, want it to contain the title %q", got, "myvm")
+	}
+	if utf8.RuneCountInString(got) != utf8.RuneCountInString(top) {
+		t.Errorf("got rune length %d, want unchanged length %d (must stay the same width as the box border)",
+			utf8.RuneCountInString(got), utf8.RuneCountInString(top))
+	}
+	if !strings.HasPrefix(got, "╭─ myvm ") {
+		t.Errorf("got %q, want it to start with the corner, a dash, then the title", got)
+	}
+	if !strings.HasSuffix(got, "╮") {
+		t.Errorf("got %q, want it to still end with the closing corner", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_TruncatesTitleTooLongToFit(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 10) + "╮"
+	got := spliceTitleIntoTopBorder(top, "a very long virtual machine name")
+
+	if utf8.RuneCountInString(got) != utf8.RuneCountInString(top) {
+		t.Errorf("got rune length %d, want unchanged length %d", utf8.RuneCountInString(got), utf8.RuneCountInString(top))
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("got %q, want a truncation ellipsis when the title doesn't fit", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_NoRoomAtAll_ReturnsUnchanged(t *testing.T) {
+	top := "╭─╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if got != top {
+		t.Errorf("got %q, want the original border unchanged when there's no room for any title", got)
+	}
+}
+
+func TestRenderCard_TitleInTopBorderAndBodyIsBoxed(t *testing.T) {
+	got := renderCard("myvm", "hello world")
+	lines := strings.Split(got, "\n")
+
+	if len(lines) < 3 {
+		t.Fatalf("renderCard output has %d lines, want at least 3 (top border, body, bottom border): %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "myvm") {
+		t.Errorf("top line = %q, want it to contain the title %q", lines[0], "myvm")
+	}
+	if !strings.HasPrefix(lines[0], "╭") {
+		t.Errorf("top line = %q, want it to start with the rounded top-left corner", lines[0])
+	}
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "╰") {
+		t.Errorf("last line = %q, want it to start with the rounded bottom-left corner", last)
+	}
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("renderCard output = %q, want it to contain the body text", got)
+	}
+}
 
 // writeVMXWithDisk writes a minimal .vmx with one virtual disk device --
 // needed for the disk-consistency-warning tests, since
@@ -294,18 +357,26 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "Keeping the last 5 backups, plus 7 daily and 4 weekly.") {
-		t.Errorf("stdout = %q, want the retention policy stated in prose", got)
+	if !strings.Contains(got, "myvm") {
+		t.Errorf("stdout = %q, want the VM name in the card's border title", got)
+	}
+	for _, want := range []string{"keep last 5", "daily 7", "weekly 4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want the retention policy stated in prose (missing %q)", got, want)
+		}
 	}
 	if !strings.Contains(got, "fully consistent") {
 		t.Errorf("stdout = %q, want a consistency sentence for the newest archive (tools were running)", got)
 	}
-	for _, want := range []string{"myvm-1", ts.Local().Format(time.RFC3339), "2.0 KiB", string(vm.ToolsRunning), "nightly"} {
+	for _, want := range []string{ts.Local().Format(time.RFC3339), "2.0 KiB", string(vm.ToolsRunning), "nightly"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stdout = %q, want it to contain %q", got, want)
 		}
 	}
-	if strings.Contains(got, "other-vm-1") {
+	// other-vm's archive has a zero-value Timestamp -- its RFC3339 form
+	// would show up distinctively if archivesForVM's per-VM filtering ever
+	// regressed and both VMs' archives got mixed into one table.
+	if strings.Contains(got, "0001-01-01") {
 		t.Errorf("stdout = %q, want it to contain only myvm's archives, not other-vm's", got)
 	}
 }
@@ -360,8 +431,9 @@ func TestStatusCmd_VMFlag_PrintsTotalSizeAcrossArchives(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
-	if !strings.Contains(out.String(), "total size: 4.0 KiB") {
-		t.Errorf("stdout = %q, want a \"total size: 4.0 KiB\" line summing both archives", out.String())
+	got := out.String()
+	if !strings.Contains(got, "Total size") || !strings.Contains(got, "4.0 KiB") {
+		t.Errorf("stdout = %q, want a total-size line summing both archives to 4.0 KiB", got)
 	}
 }
 
@@ -391,8 +463,11 @@ func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	if strings.Contains(out.String(), "consistent") {
 		t.Errorf("stdout = %q, want no consistency sentence when there's no archive to describe", out.String())
 	}
-	if !strings.Contains(out.String(), "Keeping the last 5 backups, plus 7 daily and 4 weekly.") {
-		t.Errorf("stdout = %q, want the retention policy still stated in prose even with no archives yet", out.String())
+	got := out.String()
+	for _, want := range []string{"keep last 5", "daily 7", "weekly 4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want the retention policy still stated in prose even with no archives yet (missing %q)", got, want)
+		}
 	}
 }
 
@@ -416,14 +491,12 @@ func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
-	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	// VM name + consistency sentence + retention line + total size line +
-	// table header + one archive row.
-	if len(lines) != 6 {
-		t.Fatalf("stdout had %d lines, want 6 -- an unsanitized embedded newline in Comment would split it into a seventh line: %q", len(lines), out.String())
+	got := out.String()
+	if !strings.Contains(got, "line1 line2 line3") {
+		t.Errorf("stdout = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", got)
 	}
-	if !strings.Contains(lines[5], "line1 line2 line3") {
-		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[5])
+	if strings.Contains(got, "line1\tline2") || strings.Contains(got, "line2\nline3") {
+		t.Errorf("stdout = %q, want no unsanitized tab/newline left in the row", got)
 	}
 }
 
