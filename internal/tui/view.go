@@ -9,20 +9,21 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/style"
 )
 
 // Palette per docs/superpowers/specs/2026-08-23-cli-ux-design.md's
-// semantic color table. Yellow (crash-consistent tools state) isn't used
-// for stage rows here -- progress.Event doesn't carry tools_state, only
-// the manifest does after a run completes -- so it's reserved for the
-// cancelling notice instead, which is a real "degraded, not failed"
-// signal available today.
+// semantic color table, shared via internal/style. Yellow/style.Degraded
+// (crash-consistent tools state) isn't used for stage rows here --
+// progress.Event doesn't carry tools_state, only the manifest does after a
+// run completes -- so it's reserved for the cancelling notice instead,
+// which is a real "degraded, not failed" signal available today.
 var (
-	doneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
-	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff"))
-	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
-	pendingStyle = lipgloss.NewStyle().Faint(true)
-	noticeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
+	doneStyle    = style.Done
+	activeStyle  = style.Active
+	failStyle    = style.Failed
+	pendingStyle = style.Pending
+	noticeStyle  = style.Degraded
 )
 
 const barWidth = 40

@@ -138,8 +138,8 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("stdout had %d lines, want 3 (header + 2 VM rows): %q", len(lines), out.String())
+	if len(lines) != 4 {
+		t.Fatalf("stdout had %d lines, want 4 (header + 2 VM rows + drill-down footer): %q", len(lines), out.String())
 	}
 	backedUpRow := lines[1]
 	for _, want := range []string{"backed-up-vm", ts2.Local().Format(time.RFC3339), "4.0 KiB", "2"} {
@@ -153,6 +153,9 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 	neverBackedUpRow := lines[2]
 	if !strings.Contains(neverBackedUpRow, "never-backed-up-vm") || !strings.Contains(neverBackedUpRow, "no backups yet") {
 		t.Errorf("never-backed-up-vm row = %q, want VM name and \"no backups yet\"", neverBackedUpRow)
+	}
+	if !strings.Contains(lines[3], "status --vm") {
+		t.Errorf("footer line = %q, want a hint pointing at the status --vm drill-down", lines[3])
 	}
 }
 
@@ -291,8 +294,11 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "keep last 5") || !strings.Contains(got, "keep daily 7") || !strings.Contains(got, "keep weekly 4") {
-		t.Errorf("stdout = %q, want it to print the configured retention policy", got)
+	if !strings.Contains(got, "Keeping the last 5 backups, plus 7 daily and 4 weekly.") {
+		t.Errorf("stdout = %q, want the retention policy stated in prose", got)
+	}
+	if !strings.Contains(got, "fully consistent") {
+		t.Errorf("stdout = %q, want a consistency sentence for the newest archive (tools were running)", got)
 	}
 	for _, want := range []string{"myvm-1", ts.Local().Format(time.RFC3339), "2.0 KiB", string(vm.ToolsRunning), "nightly"} {
 		if !strings.Contains(got, want) {
@@ -301,6 +307,35 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 	}
 	if strings.Contains(got, "other-vm-1") {
 		t.Errorf("stdout = %q, want it to contain only myvm's archives, not other-vm's", got)
+	}
+}
+
+func TestStatusCmd_VMFlag_CrashConsistentWhenToolsNotRunning(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) {
+			return []backup.Archive{
+				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", ToolsState: vm.ToolsNotInstalled}},
+			}, nil
+		},
+		newController: runningController,
+	})
+	root.SetArgs([]string{"status", "--vm", "myvm"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "crash-consistent") {
+		t.Errorf("stdout = %q, want a crash-consistent consistency sentence when the newest archive's tools weren't running", got)
+	}
+	if strings.Contains(got, "fully consistent") {
+		t.Errorf("stdout = %q, want no \"fully consistent\" wording for a crash-consistent backup", got)
 	}
 }
 
@@ -349,6 +384,9 @@ func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	if !strings.Contains(out.String(), "no backups yet") {
 		t.Errorf("stdout = %q, want a no-backups-yet message", out.String())
 	}
+	if strings.Contains(out.String(), "consistent") {
+		t.Errorf("stdout = %q, want no consistency sentence when there's no archive to describe", out.String())
+	}
 }
 
 func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
@@ -372,12 +410,13 @@ func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	// retention line + total size line + table header + one archive row.
-	if len(lines) != 4 {
-		t.Fatalf("stdout had %d lines, want 4 -- an unsanitized embedded newline in Comment would split it into a fifth line: %q", len(lines), out.String())
+	// VM name + consistency sentence + retention line + total size line +
+	// table header + one archive row.
+	if len(lines) != 6 {
+		t.Fatalf("stdout had %d lines, want 6 -- an unsanitized embedded newline in Comment would split it into a seventh line: %q", len(lines), out.String())
 	}
-	if !strings.Contains(lines[3], "line1 line2 line3") {
-		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[3])
+	if !strings.Contains(lines[5], "line1 line2 line3") {
+		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[5])
 	}
 }
 

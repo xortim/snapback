@@ -9,6 +9,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/style"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -271,27 +272,62 @@ func runStatusSummary(cmd *cobra.Command, vms []config.VM, archives []backup.Arc
 			return err
 		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if len(vms) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), "run `snapback status --vm <name>` for a VM's full history")
+	return err
 }
 
-// runStatusForVM prints one VM's retention policy followed by its full
-// archive history (unlike the summary table, this includes each
-// archive's tools_state, since seeing a run of crash-consistent backups
-// is exactly the "full consistency detail" this view exists for).
+// consistencySentence renders a prose sentence describing whether the most
+// recent archive was fully consistent (VMware Tools were running, so the
+// guest filesystem was quiesced before the snapshot) or crash-consistent
+// (tools weren't running) -- the same running/not-running simplification
+// checkOneVMDiskChain uses elsewhere in this file, styled per the shared
+// internal/style semantic palette.
+func consistencySentence(toolsState vm.ToolsState) string {
+	if toolsState == vm.ToolsRunning {
+		return style.Done.Render("Last backup was fully consistent — VMware Tools were running and the guest filesystem was quiesced.")
+	}
+	return style.Degraded.Render("Last backup was crash-consistent — VMware Tools were not running.")
+}
+
+// retentionSentence renders r in prose, for the --vm card -- the summary
+// table has no room for this, but the single-VM view does.
+func retentionSentence(r config.Retention) string {
+	return fmt.Sprintf("Keeping the last %d backups, plus %d daily and %d weekly.", r.KeepLast, r.KeepDaily, r.KeepWeekly)
+}
+
+// runStatusForVM prints one VM's status as a card -- name, consistency
+// sentence for its newest archive, retention policy in prose -- followed by
+// its full archive history (unlike the summary table, this includes each
+// archive's tools_state, since seeing a run of crash-consistent backups is
+// exactly the "full consistency detail" this view exists for).
 func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retention, archives []backup.Archive) error {
 	out := cmd.OutOrStdout()
 	vmArchives := archivesForVM(archives, vmCfg.Name)
 
-	if _, err := fmt.Fprintf(out, "retention: keep last %d, keep daily %d, keep weekly %d\n",
-		retention.KeepLast, retention.KeepDaily, retention.KeepWeekly); err != nil {
+	if _, err := fmt.Fprintln(out, vmCfg.Name); err != nil {
 		return err
 	}
 
 	if len(vmArchives) == 0 {
+		if _, err := fmt.Fprintln(out, retentionSentence(retention)); err != nil {
+			return err
+		}
 		_, err := fmt.Fprintf(out, "no backups yet for %q\n", vmCfg.Name)
 		return err
 	}
 
+	if _, err := fmt.Fprintln(out, consistencySentence(vmArchives[0].Manifest.ToolsState)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, retentionSentence(retention)); err != nil {
+		return err
+	}
 	if _, err := fmt.Fprintf(out, "total size: %s\n", formatSize(totalArchiveSize(vmArchives))); err != nil {
 		return err
 	}
