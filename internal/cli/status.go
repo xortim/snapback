@@ -301,19 +301,21 @@ func renderCard(title, body string) string {
 		Width(cardWidth).
 		Render(body)
 
-	top, rest, ok := strings.Cut(box, "\n")
+	top, rest, _ := strings.Cut(box, "\n")
 	top = spliceTitleIntoTopBorder(top, title)
-	if !ok {
-		return top
-	}
 	return top + "\n" + rest
 }
 
 // spliceTitleIntoTopBorder replaces the run of border characters in top
 // (a lipgloss-rendered top border, e.g. "╭──────────╮") with " title ",
-// keeping top's total rune width unchanged so the box stays rectangular.
-// title is truncated with a trailing ellipsis if it doesn't fit, and top is
-// returned unchanged if there's no room for even a 1-rune truncated title.
+// keeping top's total display width unchanged so the box stays
+// rectangular. title is measured and truncated by display width (via
+// lipgloss.Width), not rune count, since a wide (e.g. CJK) title rune
+// occupies two columns while top's border runes are always single-width
+// -- sizing by rune count would make the top border wider than the rest
+// of the card for such a title. title is truncated with a trailing
+// ellipsis if it doesn't fit, and top is returned unchanged if there's no
+// room for even a 1-rune truncated title.
 func spliceTitleIntoTopBorder(top, title string) string {
 	n := utf8.RuneCountInString(top)
 	// Minimum room for "╭─ " + 1 title rune + " ─" + "╮".
@@ -322,17 +324,23 @@ func spliceTitleIntoTopBorder(top, title string) string {
 		return top
 	}
 
-	maxTitleRunes := n - 6 // corners(2) + "─ "(2) + " "(1) + at least one "─"(1)
+	maxTitleWidth := n - 6 // corners(2) + "─ "(2) + " "(1) + at least one "─"(1)
 	titleRunes := []rune(title)
-	if len(titleRunes) > maxTitleRunes {
-		if maxTitleRunes <= 1 {
+	if lipgloss.Width(title) > maxTitleWidth {
+		if maxTitleWidth < 1 {
 			return top
 		}
-		titleRunes = append(titleRunes[:maxTitleRunes-1], '…')
+		for len(titleRunes) > 0 && lipgloss.Width(string(titleRunes)+"…") > maxTitleWidth {
+			titleRunes = titleRunes[:len(titleRunes)-1]
+		}
+		if len(titleRunes) == 0 && lipgloss.Width("…") > maxTitleWidth {
+			return top
+		}
+		titleRunes = append(titleRunes, '…')
 	}
 
 	left := "╭─ " + string(titleRunes) + " "
-	fillLen := n - utf8.RuneCountInString(left) - 1 // reserve 1 for the closing corner
+	fillLen := n - lipgloss.Width(left) - 1 // reserve 1 for the closing corner
 	return left + strings.Repeat("─", fillLen) + "╮"
 }
 
@@ -391,7 +399,7 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 			body + "\n" +
 			totalSizeLine(formatSize(totalArchiveSize(vmArchives)))
 	}
-	if _, err := fmt.Fprintln(out, renderCard(vmCfg.Name, body)); err != nil {
+	if _, err := fmt.Fprintln(out, renderCard(sanitizeForTable(vmCfg.Name), body)); err != nil {
 		return err
 	}
 

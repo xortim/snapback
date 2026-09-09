@@ -13,6 +13,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/backup"
@@ -57,6 +58,37 @@ func TestSpliceTitleIntoTopBorder_NoRoomAtAll_ReturnsUnchanged(t *testing.T) {
 
 	if got != top {
 		t.Errorf("got %q, want the original border unchanged when there's no room for any title", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_WideTitleSizedByDisplayWidthNotRuneCount(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 30) + "╮"
+	// Each rune here is double-width, so 5 runes occupy 10 display columns
+	// -- sizing by rune count instead of lipgloss.Width would under-count
+	// this title's width and widen the top border relative to the rest of
+	// the card.
+	got := spliceTitleIntoTopBorder(top, "测试虚拟机")
+
+	if !strings.Contains(got, "测试虚拟机") {
+		t.Errorf("got %q, want it to contain the title %q", got, "测试虚拟机")
+	}
+	if gotWidth := lipgloss.Width(got); gotWidth != lipgloss.Width(top) {
+		t.Errorf("got display width %d, want unchanged display width %d (must stay as wide as the box border)", gotWidth, lipgloss.Width(top))
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_OneRuneEllipsisFitsExactly(t *testing.T) {
+	// n=7 leaves exactly enough room for "╭─ … ─╮" -- a title that doesn't
+	// fit should truncate to a bare ellipsis here rather than bailing out
+	// with no title at all.
+	top := "╭" + strings.Repeat("─", 5) + "╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if !strings.Contains(got, "…") {
+		t.Errorf("got %q, want a 1-rune truncated title (ellipsis) to fit rather than being dropped", got)
+	}
+	if lipgloss.Width(got) != lipgloss.Width(top) {
+		t.Errorf("got display width %d, want unchanged display width %d", lipgloss.Width(got), lipgloss.Width(top))
 	}
 }
 
@@ -378,6 +410,36 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 	// regressed and both VMs' archives got mixed into one table.
 	if strings.Contains(got, "0001-01-01") {
 		t.Errorf("stdout = %q, want it to contain only myvm's archives, not other-vm's", got)
+	}
+}
+
+func TestStatusCmd_VMFlag_SanitizesNameInCardTitle(t *testing.T) {
+	// config.ValidateVMs only checks Name for presence/uniqueness, so a
+	// hand-edited config (or an oddly-named .vmwarevm bundle) could still
+	// carry embedded control characters -- a literal newline in the
+	// border title would split the top border across two lines and
+	// corrupt the box.
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: "/dest",
+				VMs:         []config.VM{{Name: "bad\nname"}},
+			}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		newController: runningController,
+	})
+	root.SetArgs([]string{"status", "--vm", "bad\nname"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "╭") || !strings.HasSuffix(lines[0], "╮") {
+		t.Errorf("top line = %q, want a single unbroken border line despite the embedded newline in the VM name", lines[0])
 	}
 }
 
