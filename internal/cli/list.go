@@ -58,16 +58,15 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 	}
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE\tCOMMENT"); err != nil {
+	if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE"); err != nil {
 		return err
 	}
 	for _, a := range archives {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
 			sanitizeForTable(a.ArchiveID),
 			sanitizeForTable(a.Manifest.VMName),
 			a.Manifest.Timestamp.Local().Format(time.RFC3339),
 			formatSize(a.Manifest.SizeBytes),
-			sanitizeForTable(a.Manifest.Comment),
 		)
 		if err != nil {
 			return err
@@ -102,7 +101,7 @@ func formatSize(n int64) string {
 
 // sanitizeForTable strips characters that would confuse tabwriter's
 // column (tab) and row (newline) delimiters out of free-form text -- e.g.
-// Manifest.Comment, which comes from a user-configured comment_template
+// Manifest.VMName, which comes from a discovered .vmwarevm bundle name
 // and isn't otherwise constrained.
 func sanitizeForTable(s string) string {
 	return strings.NewReplacer("\t", " ", "\n", " ", "\r", " ").Replace(s)

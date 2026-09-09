@@ -9,22 +9,15 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/style"
 )
 
 // Palette per docs/superpowers/specs/2026-08-23-cli-ux-design.md's
-// semantic color table. Yellow (crash-consistent tools state) isn't used
-// for stage rows here -- progress.Event doesn't carry tools_state, only
-// the manifest does after a run completes -- so it's reserved for the
-// cancelling notice instead, which is a real "degraded, not failed"
-// signal available today.
-var (
-	doneStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575"))
-	activeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#58a6ff"))
-	failStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("#f85149"))
-	pendingStyle = lipgloss.NewStyle().Faint(true)
-	noticeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("#e3b341"))
-)
-
+// semantic color table, shared via internal/style. style.Degraded
+// (crash-consistent tools state) isn't used for stage rows here --
+// progress.Event doesn't carry tools_state, only the manifest does after a
+// run completes -- so it's reserved for the cancelling notice instead,
+// which is a real "degraded, not failed" signal available today.
 const barWidth = 40
 
 // View implements tea.Model.
@@ -45,15 +38,15 @@ func (m Model) View() string {
 	fmt.Fprintf(&b, "\nelapsed: %s\n", m.elapsed.Round(time.Second))
 
 	if m.cancelling && !m.finished {
-		b.WriteString(noticeStyle.Render("cancelling... (waiting for the current step to finish)") + "\n")
+		b.WriteString(style.Degraded.Render("cancelling... (waiting for the current step to finish)") + "\n")
 	}
 	if m.finished {
 		if m.err == nil && m.result != nil {
-			b.WriteString(doneStyle.Render(fmt.Sprintf("backup complete: %s", m.result.ArchivePath)) + "\n")
+			b.WriteString(style.Done.Render(fmt.Sprintf("backup complete: %s", m.result.ArchivePath)) + "\n")
 		} else if m.err == nil {
-			b.WriteString(doneStyle.Render("backup complete") + "\n")
+			b.WriteString(style.Done.Render("backup complete") + "\n")
 		} else {
-			b.WriteString(failStyle.Render(fmt.Sprintf("error: %v", m.err)) + "\n")
+			b.WriteString(style.Failed.Render(fmt.Sprintf("error: %v", m.err)) + "\n")
 		}
 	}
 	return b.String()
@@ -71,12 +64,12 @@ func renderRow(row stageRow) string {
 func iconFor(s stageStatus) (string, lipgloss.Style) {
 	switch s {
 	case done:
-		return "✓", doneStyle
+		return "✓", style.Done
 	case active:
-		return "◐", activeStyle
+		return "◐", style.Active
 	case failed:
-		return "✗", failStyle
+		return "✗", style.Failed
 	default:
-		return "○", pendingStyle
+		return "○", style.Pending
 	}
 }

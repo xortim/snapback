@@ -11,13 +11,108 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/vm"
 )
+
+func TestSpliceTitleIntoTopBorder_EmbedsTitleKeepingLength(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 30) + "╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if !strings.Contains(got, "myvm") {
+		t.Errorf("got %q, want it to contain the title %q", got, "myvm")
+	}
+	if utf8.RuneCountInString(got) != utf8.RuneCountInString(top) {
+		t.Errorf("got rune length %d, want unchanged length %d (must stay the same width as the box border)",
+			utf8.RuneCountInString(got), utf8.RuneCountInString(top))
+	}
+	if !strings.HasPrefix(got, "╭─ myvm ") {
+		t.Errorf("got %q, want it to start with the corner, a dash, then the title", got)
+	}
+	if !strings.HasSuffix(got, "╮") {
+		t.Errorf("got %q, want it to still end with the closing corner", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_TruncatesTitleTooLongToFit(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 10) + "╮"
+	got := spliceTitleIntoTopBorder(top, "a very long virtual machine name")
+
+	if utf8.RuneCountInString(got) != utf8.RuneCountInString(top) {
+		t.Errorf("got rune length %d, want unchanged length %d", utf8.RuneCountInString(got), utf8.RuneCountInString(top))
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("got %q, want a truncation ellipsis when the title doesn't fit", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_NoRoomAtAll_ReturnsUnchanged(t *testing.T) {
+	top := "╭─╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if got != top {
+		t.Errorf("got %q, want the original border unchanged when there's no room for any title", got)
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_WideTitleSizedByDisplayWidthNotRuneCount(t *testing.T) {
+	top := "╭" + strings.Repeat("─", 30) + "╮"
+	// Each rune here is double-width, so 5 runes occupy 10 display columns
+	// -- sizing by rune count instead of lipgloss.Width would under-count
+	// this title's width and widen the top border relative to the rest of
+	// the card.
+	got := spliceTitleIntoTopBorder(top, "测试虚拟机")
+
+	if !strings.Contains(got, "测试虚拟机") {
+		t.Errorf("got %q, want it to contain the title %q", got, "测试虚拟机")
+	}
+	if gotWidth := lipgloss.Width(got); gotWidth != lipgloss.Width(top) {
+		t.Errorf("got display width %d, want unchanged display width %d (must stay as wide as the box border)", gotWidth, lipgloss.Width(top))
+	}
+}
+
+func TestSpliceTitleIntoTopBorder_OneRuneEllipsisFitsExactly(t *testing.T) {
+	// n=7 leaves exactly enough room for "╭─ … ─╮" -- a title that doesn't
+	// fit should truncate to a bare ellipsis here rather than bailing out
+	// with no title at all.
+	top := "╭" + strings.Repeat("─", 5) + "╮"
+	got := spliceTitleIntoTopBorder(top, "myvm")
+
+	if !strings.Contains(got, "…") {
+		t.Errorf("got %q, want a 1-rune truncated title (ellipsis) to fit rather than being dropped", got)
+	}
+	if lipgloss.Width(got) != lipgloss.Width(top) {
+		t.Errorf("got display width %d, want unchanged display width %d", lipgloss.Width(got), lipgloss.Width(top))
+	}
+}
+
+func TestRenderCard_TitleInTopBorderAndBodyIsBoxed(t *testing.T) {
+	got := renderCard("myvm", "hello world")
+	lines := strings.Split(got, "\n")
+
+	if len(lines) < 3 {
+		t.Fatalf("renderCard output has %d lines, want at least 3 (top border, body, bottom border): %q", len(lines), got)
+	}
+	if !strings.Contains(lines[0], "myvm") {
+		t.Errorf("top line = %q, want it to contain the title %q", lines[0], "myvm")
+	}
+	if !strings.HasPrefix(lines[0], "╭") {
+		t.Errorf("top line = %q, want it to start with the rounded top-left corner", lines[0])
+	}
+	last := lines[len(lines)-1]
+	if !strings.HasPrefix(last, "╰") {
+		t.Errorf("last line = %q, want it to start with the rounded bottom-left corner", last)
+	}
+	if !strings.Contains(got, "hello world") {
+		t.Errorf("renderCard output = %q, want it to contain the body text", got)
+	}
+}
 
 // writeVMXWithDisk writes a minimal .vmx with one virtual disk device --
 // needed for the disk-consistency-warning tests, since
@@ -138,8 +233,8 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 3 {
-		t.Fatalf("stdout had %d lines, want 3 (header + 2 VM rows): %q", len(lines), out.String())
+	if len(lines) != 4 {
+		t.Fatalf("stdout had %d lines, want 4 (header + 2 VM rows + drill-down footer): %q", len(lines), out.String())
 	}
 	backedUpRow := lines[1]
 	for _, want := range []string{"backed-up-vm", ts2.Local().Format(time.RFC3339), "4.0 KiB", "2"} {
@@ -153,6 +248,9 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 	neverBackedUpRow := lines[2]
 	if !strings.Contains(neverBackedUpRow, "never-backed-up-vm") || !strings.Contains(neverBackedUpRow, "no backups yet") {
 		t.Errorf("never-backed-up-vm row = %q, want VM name and \"no backups yet\"", neverBackedUpRow)
+	}
+	if !strings.Contains(lines[3], "status --vm") {
+		t.Errorf("footer line = %q, want a hint pointing at the status --vm drill-down", lines[3])
 	}
 }
 
@@ -273,7 +371,7 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 				{
 					ArchiveID: "myvm-1",
 					Manifest: backup.Manifest{
-						VMName: "myvm", SizeBytes: 2048, Comment: "nightly",
+						VMName: "myvm", SizeBytes: 2048,
 						Timestamp: ts, ToolsState: vm.ToolsRunning,
 					},
 				},
@@ -291,16 +389,86 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "keep last 5") || !strings.Contains(got, "keep daily 7") || !strings.Contains(got, "keep weekly 4") {
-		t.Errorf("stdout = %q, want it to print the configured retention policy", got)
+	if !strings.Contains(got, "myvm") {
+		t.Errorf("stdout = %q, want the VM name in the card's border title", got)
 	}
-	for _, want := range []string{"myvm-1", ts.Local().Format(time.RFC3339), "2.0 KiB", string(vm.ToolsRunning), "nightly"} {
+	for _, want := range []string{"keep last 5", "daily 7", "weekly 4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want the retention policy stated in prose (missing %q)", got, want)
+		}
+	}
+	if !strings.Contains(got, "fully consistent") {
+		t.Errorf("stdout = %q, want a consistency sentence for the newest archive (tools were running)", got)
+	}
+	for _, want := range []string{ts.Local().Format(time.RFC3339), "2.0 KiB", string(vm.ToolsRunning)} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stdout = %q, want it to contain %q", got, want)
 		}
 	}
-	if strings.Contains(got, "other-vm-1") {
+	// other-vm's archive has a zero-value Timestamp -- its RFC3339 form
+	// would show up distinctively if archivesForVM's per-VM filtering ever
+	// regressed and both VMs' archives got mixed into one table.
+	if strings.Contains(got, "0001-01-01") {
 		t.Errorf("stdout = %q, want it to contain only myvm's archives, not other-vm's", got)
+	}
+}
+
+func TestStatusCmd_VMFlag_SanitizesNameInCardTitle(t *testing.T) {
+	// config.ValidateVMs only checks Name for presence/uniqueness, so a
+	// hand-edited config (or an oddly-named .vmwarevm bundle) could still
+	// carry embedded control characters -- a literal newline in the
+	// border title would split the top border across two lines and
+	// corrupt the box.
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: "/dest",
+				VMs:         []config.VM{{Name: "bad\nname"}},
+			}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		newController: runningController,
+	})
+	root.SetArgs([]string{"status", "--vm", "bad\nname"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	lines := strings.Split(out.String(), "\n")
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "╭") || !strings.HasSuffix(lines[0], "╮") {
+		t.Errorf("top line = %q, want a single unbroken border line despite the embedded newline in the VM name", lines[0])
+	}
+}
+
+func TestStatusCmd_VMFlag_CrashConsistentWhenToolsNotRunning(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) {
+			return []backup.Archive{
+				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", ToolsState: vm.ToolsNotInstalled}},
+			}, nil
+		},
+		newController: runningController,
+	})
+	root.SetArgs([]string{"status", "--vm", "myvm"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "crash-consistent") {
+		t.Errorf("stdout = %q, want a crash-consistent consistency sentence when the newest archive's tools weren't running", got)
+	}
+	if strings.Contains(got, "fully consistent") {
+		t.Errorf("stdout = %q, want no \"fully consistent\" wording for a crash-consistent backup", got)
 	}
 }
 
@@ -325,15 +493,20 @@ func TestStatusCmd_VMFlag_PrintsTotalSizeAcrossArchives(t *testing.T) {
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
-	if !strings.Contains(out.String(), "total size: 4.0 KiB") {
-		t.Errorf("stdout = %q, want a \"total size: 4.0 KiB\" line summing both archives", out.String())
+	got := out.String()
+	if !strings.Contains(got, "Total size") || !strings.Contains(got, "4.0 KiB") {
+		t.Errorf("stdout = %q, want a total-size line summing both archives to 4.0 KiB", got)
 	}
 }
 
 func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	root := newTestRootForStatus(t, statusDeps{
 		loadConfig: func(string) (*config.Config, error) {
-			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+			return &config.Config{
+				Destination: "/dest",
+				Retention:   config.Retention{KeepLast: 5, KeepDaily: 7, KeepWeekly: 4},
+				VMs:         []config.VM{{Name: "myvm"}},
+			}, nil
 		},
 		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
 		newController: runningController,
@@ -349,35 +522,14 @@ func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	if !strings.Contains(out.String(), "no backups yet") {
 		t.Errorf("stdout = %q, want a no-backups-yet message", out.String())
 	}
-}
-
-func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
-	root := newTestRootForStatus(t, statusDeps{
-		loadConfig: func(string) (*config.Config, error) {
-			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
-		},
-		listArchives: func(string) ([]backup.Archive, error) {
-			return []backup.Archive{
-				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", Comment: "line1\tline2\nline3"}},
-			}, nil
-		},
-		newController: runningController,
-	})
-	root.SetArgs([]string{"status", "--vm", "myvm"})
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want nil", err)
+	if strings.Contains(out.String(), "consistent") {
+		t.Errorf("stdout = %q, want no consistency sentence when there's no archive to describe", out.String())
 	}
-	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	// retention line + total size line + table header + one archive row.
-	if len(lines) != 4 {
-		t.Fatalf("stdout had %d lines, want 4 -- an unsanitized embedded newline in Comment would split it into a fifth line: %q", len(lines), out.String())
-	}
-	if !strings.Contains(lines[3], "line1 line2 line3") {
-		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[3])
+	got := out.String()
+	for _, want := range []string{"keep last 5", "daily 7", "weekly 4"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stdout = %q, want the retention policy still stated in prose even with no archives yet (missing %q)", got, want)
+		}
 	}
 }
 

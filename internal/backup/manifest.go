@@ -20,7 +20,6 @@ type Manifest struct {
 	VMName      string        `json:"vm_name"`
 	GuestOS     string        `json:"guest_os"`
 	SizeBytes   int64         `json:"size_bytes"`
-	Comment     string        `json:"comment"`
 	Timestamp   time.Time     `json:"timestamp"`
 	ToolsState  vm.ToolsState `json:"tools_state"`
 	SHA256      string        `json:"sha256"`

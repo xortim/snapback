@@ -124,7 +124,7 @@ back — never clone:
 6. tar + compress (zstd, gzip fallback if zstd isn't installed) the
    staged copy to the destination.
 7. SHA-256 the archive, write `manifest.json` (VM name, guest OS, size,
-   comment, timestamp, `tools_state`).
+   timestamp, `tools_state`).
 8. Remove the staging copy, prune archives beyond retention policy, fire
    an `osascript` notification.
 

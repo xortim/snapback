@@ -45,7 +45,6 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	opts := backup.Options{
 		VMName:      "myvm",
 		VMXPath:     vmxPath,
-		Comment:     "test backup",
 		Destination: t.TempDir(),
 		StagingDir:  stagingDir,
 		Compression: "gzip",
@@ -62,9 +61,6 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	}
 	if result.Manifest.GuestOS != "ubuntu-64" {
 		t.Errorf("Manifest.GuestOS = %q, want %q", result.Manifest.GuestOS, "ubuntu-64")
-	}
-	if result.Manifest.Comment != "test backup" {
-		t.Errorf("Manifest.Comment = %q, want %q", result.Manifest.Comment, "test backup")
 	}
 	if result.Manifest.ToolsState != vm.ToolsRunning {
 		t.Errorf("Manifest.ToolsState = %q, want %q", result.Manifest.ToolsState, vm.ToolsRunning)
@@ -114,7 +110,6 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	if onDiskManifest.VMName != result.Manifest.VMName ||
 		onDiskManifest.GuestOS != result.Manifest.GuestOS ||
 		onDiskManifest.SizeBytes != result.Manifest.SizeBytes ||
-		onDiskManifest.Comment != result.Manifest.Comment ||
 		!onDiskManifest.Timestamp.Equal(result.Manifest.Timestamp) ||
 		onDiskManifest.ToolsState != result.Manifest.ToolsState ||
 		onDiskManifest.SHA256 != result.Manifest.SHA256 ||

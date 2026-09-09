@@ -14,7 +14,7 @@ func TestMarshal_ProducesExpectedYAML(t *testing.T) {
 		Compression: "zstd",
 		Retention:   config.Retention{KeepLast: 5, KeepDaily: 7, KeepWeekly: 4},
 		VMs: []config.VM{
-			{Name: "dev-ubuntu", VMX: "/vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx", Schedule: "0 2 * * *", CommentTemplate: "nightly auto-backup"},
+			{Name: "dev-ubuntu", VMX: "/vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx", Schedule: "0 2 * * *"},
 			{Name: "win-testbed", VMX: "/vms/win-testbed.vmwarevm/win-testbed.vmx"},
 		},
 		Notifications: config.Notifications{Enabled: true},
@@ -34,7 +34,6 @@ vms:
     - name: dev-ubuntu
       vmx: /vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
       schedule: 0 2 * * *
-      comment_template: nightly auto-backup
     - name: win-testbed
       vmx: /vms/win-testbed.vmwarevm/win-testbed.vmx
 notifications:

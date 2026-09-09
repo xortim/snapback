@@ -56,7 +56,6 @@ func TestListCmd_PrintsArchiveTable(t *testing.T) {
 					Manifest: backup.Manifest{
 						VMName:    "myvm",
 						SizeBytes: 2048,
-						Comment:   "nightly",
 						Timestamp: ts,
 					},
 				},
@@ -72,7 +71,7 @@ func TestListCmd_PrintsArchiveTable(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	got := out.String()
-	for _, want := range []string{"myvm-20260304T050607Z", "myvm", "nightly", "2.0 KiB"} {
+	for _, want := range []string{"myvm-20260304T050607Z", "myvm", "2.0 KiB"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stdout = %q, want it to contain %q", got, want)
 		}
@@ -106,32 +105,6 @@ func TestListCmd_ListArchivesError_IsWrapped(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), errBoom.Error()) || !strings.Contains(err.Error(), "list archives") {
 		t.Fatalf("Execute() error = %v, want it to wrap %q with \"list archives\" context", err, errBoom)
-	}
-}
-
-func TestListCmd_SanitizesCommentForTable(t *testing.T) {
-	root := newTestRootForList(t, listDeps{
-		loadConfig: func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
-		listArchives: func(string) ([]backup.Archive, error) {
-			return []backup.Archive{
-				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", Comment: "line1\tline2\nline3"}},
-			}, nil
-		},
-	})
-	root.SetArgs([]string{"list"})
-	var out bytes.Buffer
-	root.SetOut(&out)
-	root.SetErr(&bytes.Buffer{})
-
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want nil", err)
-	}
-	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 2 {
-		t.Fatalf("stdout had %d lines, want 2 (header + one archive row) -- an unsanitized embedded newline in Comment would split it into a third line: %q", len(lines), out.String())
-	}
-	if !strings.Contains(lines[1], "line1 line2 line3") {
-		t.Errorf("row = %q, want Comment's embedded tab/newline replaced with spaces (\"line1 line2 line3\")", lines[1])
 	}
 }
 

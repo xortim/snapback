@@ -24,7 +24,6 @@ const SnapshotPrefix = "snapback-"
 type Options struct {
 	VMName      string
 	VMXPath     string
-	Comment     string
 	Destination string           // parent directory the backup's output directory is created under
 	StagingDir  string           // parent directory for the temporary staging copy; os.TempDir() if empty
 	Compression string           // "zstd", "gzip", or "" (prefer zstd, fall back to gzip)
@@ -399,7 +398,6 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		VMName:      opts.VMName,
 		GuestOS:     guestOS,
 		SizeBytes:   info.Size(),
-		Comment:     opts.Comment,
 		Timestamp:   startTime,
 		ToolsState:  toolsState,
 		SHA256:      sum,

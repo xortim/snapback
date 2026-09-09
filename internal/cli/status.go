@@ -2,13 +2,17 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode/utf8"
 
+	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/style"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -271,42 +275,152 @@ func runStatusSummary(cmd *cobra.Command, vms []config.VM, archives []backup.Arc
 			return err
 		}
 	}
-	return w.Flush()
+	if err := w.Flush(); err != nil {
+		return err
+	}
+	if len(vms) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), "run `snapback status --vm <name>` for a VM's full history")
+	return err
 }
 
-// runStatusForVM prints one VM's retention policy followed by its full
-// archive history (unlike the summary table, this includes each
-// archive's tools_state, since seeing a run of crash-consistent backups
-// is exactly the "full consistency detail" this view exists for).
+// cardWidth is the fixed content width (in columns, before lipgloss adds
+// border and padding) used for the --vm status card's box.
+const cardWidth = 56
+
+// renderCard renders body inside a rounded-border box, with title spliced
+// into the top border (e.g. "╭─ myvm ────╮") rather than printed as a
+// separate line above the box -- lipgloss wraps body to cardWidth and pads
+// every line to a uniform width automatically; only the title placement is
+// hand-rolled, since lipgloss has no built-in support for a bordered title.
+func renderCard(title, body string) string {
+	box := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		Padding(0, 1).
+		Width(cardWidth).
+		Render(body)
+
+	top, rest, _ := strings.Cut(box, "\n")
+	top = spliceTitleIntoTopBorder(top, title)
+	return top + "\n" + rest
+}
+
+// spliceTitleIntoTopBorder replaces the run of border characters in top
+// (a lipgloss-rendered top border, e.g. "╭──────────╮") with " title ",
+// keeping top's total display width unchanged so the box stays
+// rectangular. title is measured and truncated by display width (via
+// lipgloss.Width), not rune count, since a wide (e.g. CJK) title rune
+// occupies two columns while top's border runes are always single-width
+// -- sizing by rune count would make the top border wider than the rest
+// of the card for such a title. title is truncated with a trailing
+// ellipsis if it doesn't fit, and top is returned unchanged if there's no
+// room for even a 1-rune truncated title.
+func spliceTitleIntoTopBorder(top, title string) string {
+	n := utf8.RuneCountInString(top)
+	// Minimum room for "╭─ " + 1 title rune + " ─" + "╮".
+	const minWidth = 7
+	if n < minWidth {
+		return top
+	}
+
+	maxTitleWidth := n - 6 // corners(2) + "─ "(2) + " "(1) + at least one "─"(1)
+	titleRunes := []rune(title)
+	if lipgloss.Width(title) > maxTitleWidth {
+		if maxTitleWidth < 1 {
+			return top
+		}
+		for len(titleRunes) > 0 && lipgloss.Width(string(titleRunes)+"…") > maxTitleWidth {
+			titleRunes = titleRunes[:len(titleRunes)-1]
+		}
+		if len(titleRunes) == 0 && lipgloss.Width("…") > maxTitleWidth {
+			return top
+		}
+		titleRunes = append(titleRunes, '…')
+	}
+
+	left := "╭─ " + string(titleRunes) + " "
+	fillLen := n - lipgloss.Width(left) - 1 // reserve 1 for the closing corner
+	return left + strings.Repeat("─", fillLen) + "╮"
+}
+
+// consistencyLine renders an icon-prefixed line describing whether the most
+// recent archive was fully consistent (VMware Tools were running, so the
+// guest filesystem was quiesced before the snapshot) or crash-consistent
+// (tools weren't running) -- the same running/not-running simplification
+// checkOneVMDiskChain uses elsewhere in this file, styled per the shared
+// internal/style semantic palette.
+func consistencyLine(toolsState vm.ToolsState) string {
+	if toolsState == vm.ToolsRunning {
+		return style.Done.Render("✓ Last backup was fully consistent — VMware Tools were running and the guest filesystem was quiesced.")
+	}
+	return style.Degraded.Render("⚠ Last backup was crash-consistent — VMware Tools were not running.")
+}
+
+// retentionLine renders r as a compact key-value line for the --vm card.
+func retentionLine(r config.Retention) string {
+	return fmt.Sprintf("Retention    keep last %d · daily %d · weekly %d", r.KeepLast, r.KeepDaily, r.KeepWeekly)
+}
+
+// totalSizeLine renders the card's total-size key-value line.
+func totalSizeLine(size string) string {
+	return fmt.Sprintf("Total size   %s", size)
+}
+
+// archiveStateCell renders one archive row's tools-state cell as an
+// icon-prefixed, palette-colored string -- the row-level counterpart to
+// consistencyLine, so a scan down the STATE column reads by color/icon
+// rather than requiring the raw tools_state string to be parsed.
+func archiveStateCell(toolsState vm.ToolsState) string {
+	if toolsState == vm.ToolsRunning {
+		return style.Done.Render("✓ " + string(toolsState))
+	}
+	return style.Degraded.Render("⚠ " + string(toolsState))
+}
+
+// runStatusForVM prints one VM's status as a bordered card -- name in the
+// border, consistency line for its newest archive, retention policy and
+// total size as key-value lines -- followed by its full archive history
+// (unlike the summary table, this includes each archive's tools_state,
+// since seeing a run of crash-consistent backups is exactly the "full
+// consistency detail" this view exists for). The disk-usage bar
+// docs/superpowers/specs/2026-08-23-cli-ux-design.md's original card
+// description mentions, and the per-archive ARCHIVE ID column the table
+// used to show, are both deliberate scope cuts for this pass, not
+// oversights -- "total size" covers the size information, and no command
+// consumes an archive ID yet (restore is phase 3).
 func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retention, archives []backup.Archive) error {
 	out := cmd.OutOrStdout()
 	vmArchives := archivesForVM(archives, vmCfg.Name)
 
-	if _, err := fmt.Fprintf(out, "retention: keep last %d, keep daily %d, keep weekly %d\n",
-		retention.KeepLast, retention.KeepDaily, retention.KeepWeekly); err != nil {
+	body := retentionLine(retention)
+	if len(vmArchives) > 0 {
+		body = consistencyLine(vmArchives[0].Manifest.ToolsState) + "\n\n" +
+			body + "\n" +
+			totalSizeLine(formatSize(totalArchiveSize(vmArchives)))
+	}
+	if _, err := fmt.Fprintln(out, renderCard(sanitizeForTable(vmCfg.Name), body)); err != nil {
 		return err
 	}
 
 	if len(vmArchives) == 0 {
-		_, err := fmt.Fprintf(out, "no backups yet for %q\n", vmCfg.Name)
+		_, err := fmt.Fprintf(out, "\nno backups yet for %q\n", vmCfg.Name)
 		return err
 	}
 
-	if _, err := fmt.Fprintf(out, "total size: %s\n", formatSize(totalArchiveSize(vmArchives))); err != nil {
+	if _, err := fmt.Fprintln(out); err != nil {
 		return err
 	}
 
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "ARCHIVE ID\tTIMESTAMP\tSIZE\tTOOLS STATE\tCOMMENT"); err != nil {
+	if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE"); err != nil {
 		return err
 	}
 	for _, a := range vmArchives {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			sanitizeForTable(a.ArchiveID),
+		_, err := fmt.Fprintf(w, "%s\t%s\t%s\n",
 			a.Manifest.Timestamp.Local().Format(time.RFC3339),
 			formatSize(a.Manifest.SizeBytes),
-			a.Manifest.ToolsState,
-			sanitizeForTable(a.Manifest.Comment),
+			archiveStateCell(a.Manifest.ToolsState),
 		)
 		if err != nil {
 			return err

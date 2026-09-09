@@ -163,7 +163,6 @@ func TestListArchives_PreservesManifestFields(t *testing.T) {
 		VMName:      "myvm",
 		GuestOS:     "ubuntu-64",
 		SizeBytes:   12345,
-		Comment:     "nightly",
 		Timestamp:   time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC),
 		ToolsState:  vm.ToolsRunning,
 		SHA256:      "deadbeef",
@@ -180,7 +179,7 @@ func TestListArchives_PreservesManifestFields(t *testing.T) {
 	}
 	got := archives[0].Manifest
 	if got.VMName != want.VMName || got.GuestOS != want.GuestOS || got.SizeBytes != want.SizeBytes ||
-		got.Comment != want.Comment || !got.Timestamp.Equal(want.Timestamp) || got.ToolsState != want.ToolsState ||
+		!got.Timestamp.Equal(want.Timestamp) || got.ToolsState != want.ToolsState ||
 		got.SHA256 != want.SHA256 || got.Compression != want.Compression {
 		t.Errorf("archives[0].Manifest = %+v, want %+v", got, want)
 	}
