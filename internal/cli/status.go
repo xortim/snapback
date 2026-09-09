@@ -305,7 +305,11 @@ func retentionSentence(r config.Retention) string {
 // sentence for its newest archive, retention policy in prose -- followed by
 // its full archive history (unlike the summary table, this includes each
 // archive's tools_state, since seeing a run of crash-consistent backups is
-// exactly the "full consistency detail" this view exists for).
+// exactly the "full consistency detail" this view exists for). The
+// disk-usage bar docs/superpowers/specs/2026-08-23-cli-ux-design.md's
+// original card description mentions is a deliberate scope cut for this
+// pass, not an oversight -- "total size" below covers the same information
+// as plain text.
 func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retention, archives []backup.Archive) error {
 	out := cmd.OutOrStdout()
 	vmArchives := archivesForVM(archives, vmCfg.Name)

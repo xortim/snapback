@@ -368,7 +368,11 @@ func TestStatusCmd_VMFlag_PrintsTotalSizeAcrossArchives(t *testing.T) {
 func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	root := newTestRootForStatus(t, statusDeps{
 		loadConfig: func(string) (*config.Config, error) {
-			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+			return &config.Config{
+				Destination: "/dest",
+				Retention:   config.Retention{KeepLast: 5, KeepDaily: 7, KeepWeekly: 4},
+				VMs:         []config.VM{{Name: "myvm"}},
+			}, nil
 		},
 		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
 		newController: runningController,
@@ -386,6 +390,9 @@ func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 	}
 	if strings.Contains(out.String(), "consistent") {
 		t.Errorf("stdout = %q, want no consistency sentence when there's no archive to describe", out.String())
+	}
+	if !strings.Contains(out.String(), "Keeping the last 5 backups, plus 7 daily and 4 weekly.") {
+		t.Errorf("stdout = %q, want the retention policy still stated in prose even with no archives yet", out.String())
 	}
 }
 
