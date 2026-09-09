@@ -6,6 +6,8 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +18,34 @@ import (
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/vm"
 )
+
+// writeVMXWithDisk writes a minimal .vmx with one virtual disk device --
+// needed for the disk-consistency-warning tests, since
+// backup.CheckVMDiskConsistency has nothing to check against a vmx with
+// no disk device lines.
+func writeVMXWithDisk(t *testing.T) (vmxPath string) {
+	t.Helper()
+	bundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(bundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	vmxPath = filepath.Join(bundle, "myvm.vmx")
+	contents := "guestOS = \"ubuntu-64\"\nnvme0:0.fileName = \"disk.vmdk\"\n"
+	if err := os.WriteFile(vmxPath, []byte(contents), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	return vmxPath
+}
+
+// runningController returns a fake vm.Controller reporting ToolsRunning,
+// which skips the disk-consistency check entirely -- used by summary
+// tests that don't otherwise care about disk consistency, so they don't
+// need a real vmx-with-disk fixture.
+func runningController() (vm.Controller, error) {
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	return fake, nil
+}
 
 // newTestRootForStatus builds the real root command with a status
 // subcommand wired to a fake deps -- see swapSubcommand for why it's
@@ -95,8 +125,9 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 				{ArchiveID: "backed-up-vm-1", Manifest: backup.Manifest{VMName: "backed-up-vm", SizeBytes: 1024, Timestamp: ts1}},
 			}, nil
 		},
-		searchDirs:  func() []string { return nil },
-		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -135,6 +166,7 @@ func TestStatusCmd_Summary_NotesDiscoveredVMNotInConfig(t *testing.T) {
 		discoverVMs: func([]string) ([]discoveredVM, error) {
 			return []discoveredVM{{Name: "configured-vm"}, {Name: "new-vm"}}, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -162,6 +194,7 @@ func TestStatusCmd_Summary_NoNoteWhenAllDiscoveredAreConfigured(t *testing.T) {
 		discoverVMs: func([]string) ([]discoveredVM, error) {
 			return []discoveredVM{{Name: "configured-vm"}}, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -181,9 +214,10 @@ func TestStatusCmd_Summary_DiscoveryErrorIsNotedNotFatal(t *testing.T) {
 		loadConfig: func(string) (*config.Config, error) {
 			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
 		},
-		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
-		searchDirs:   func() []string { return nil },
-		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, errBoom },
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, errBoom },
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -213,6 +247,7 @@ func TestStatusCmd_VMFlag_DoesNotRunDiscovery(t *testing.T) {
 			t.Fatal("discoverVMs should not be called for --vm")
 			return nil, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status", "--vm", "myvm"})
 	root.SetOut(&bytes.Buffer{})
@@ -245,6 +280,7 @@ func TestStatusCmd_VMFlag_PrintsRetentionAndArchiveHistory(t *testing.T) {
 				{ArchiveID: "other-vm-1", Manifest: backup.Manifest{VMName: "other-vm"}},
 			}, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status", "--vm", "myvm"})
 	var out bytes.Buffer
@@ -279,6 +315,7 @@ func TestStatusCmd_VMFlag_PrintsTotalSizeAcrossArchives(t *testing.T) {
 				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", SizeBytes: 1024}},
 			}, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status", "--vm", "myvm"})
 	var out bytes.Buffer
@@ -298,7 +335,8 @@ func TestStatusCmd_VMFlag_NoBackupsYet(t *testing.T) {
 		loadConfig: func(string) (*config.Config, error) {
 			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
 		},
-		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status", "--vm", "myvm"})
 	var out bytes.Buffer
@@ -323,6 +361,7 @@ func TestStatusCmd_VMFlag_SanitizesCommentForTable(t *testing.T) {
 				{ArchiveID: "myvm-1", Manifest: backup.Manifest{VMName: "myvm", Comment: "line1\tline2\nline3"}},
 			}, nil
 		},
+		newController: runningController,
 	})
 	root.SetArgs([]string{"status", "--vm", "myvm"})
 	var out bytes.Buffer
@@ -353,5 +392,145 @@ func TestStatusCmd_RejectsExtraPositionalArgs(t *testing.T) {
 
 	if err := root.Execute(); err == nil {
 		t.Fatal("Execute() error = nil, want an error for an unexpected positional argument")
+	}
+}
+
+func TestStatusCmd_Summary_WarnsWhenDiskChainNeedsRepair(t *testing.T) {
+	vmxPath := writeVMXWithDisk(t)
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: vmxPath}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: func() (vm.Controller, error) {
+			fake := vm.NewFakeVMController()
+			fake.ToolsState = vm.ToolsInstalled
+			fake.DiskConsistencyErr = errBoom
+			return fake, nil
+		},
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "myvm") {
+		t.Errorf("stderr = %q, want a warning: line naming the damaged VM %q", errOut.String(), "myvm")
+	}
+}
+
+func TestStatusCmd_Summary_NoWarningWhenDiskHealthy(t *testing.T) {
+	vmxPath := writeVMXWithDisk(t)
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: vmxPath}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: func() (vm.Controller, error) {
+			fake := vm.NewFakeVMController()
+			fake.ToolsState = vm.ToolsInstalled
+			return fake, nil
+		},
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if errOut.String() != "" {
+		t.Errorf("stderr = %q, want empty for a healthy disk chain", errOut.String())
+	}
+}
+
+func TestStatusCmd_Summary_NoWarningForRunningVM(t *testing.T) {
+	vmxPath := writeVMXWithDisk(t)
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: vmxPath}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: func() (vm.Controller, error) {
+			fake := vm.NewFakeVMController()
+			fake.ToolsState = vm.ToolsRunning
+			fake.DiskConsistencyErr = errBoom // must not matter -- a running VM's disk files are locked
+			return fake, nil
+		},
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if strings.Contains(errOut.String(), "warning:") {
+		t.Errorf("stderr = %q, want no warning for a running VM (its disk files are locked, not actually checked)", errOut.String())
+	}
+}
+
+func TestStatusCmd_VMFlag_WarnsWhenDiskChainNeedsRepair(t *testing.T) {
+	vmxPath := writeVMXWithDisk(t)
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: vmxPath}}}, nil
+		},
+		listArchives: func(string) ([]backup.Archive, error) { return nil, nil },
+		newController: func() (vm.Controller, error) {
+			fake := vm.NewFakeVMController()
+			fake.ToolsState = vm.ToolsInstalled
+			fake.DiskConsistencyErr = errBoom
+			return fake, nil
+		},
+	})
+	root.SetArgs([]string{"status", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "myvm") {
+		t.Errorf("stderr = %q, want a warning: line naming the damaged VM %q for the --vm view too", errOut.String(), "myvm")
+	}
+}
+
+func TestStatusCmd_Summary_DiskCheckFactoryErrorIsNotedNotFatal(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: func() (vm.Controller, error) { return nil, errBoom },
+	})
+	root.SetArgs([]string{"status"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil -- a disk-check factory failure must not break status's core job", err)
+	}
+	if !strings.Contains(errOut.String(), errBoom.Error()) {
+		t.Errorf("stderr = %q, want it to note the factory failure", errOut.String())
+	}
+	if !strings.Contains(out.String(), "myvm") {
+		t.Errorf("stdout = %q, want the summary table still printed", out.String())
 	}
 }

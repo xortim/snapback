@@ -57,7 +57,13 @@ type Result struct {
 // vmware-vmx itself successfully opened the whole chain to get to
 // "running" in the first place. Both of this function's call sites in
 // Run gate on the same toolsState != vm.ToolsRunning check the rest of
-// the choreography already uses to decide crash-consistent vs. quiesced.
+// the choreography already uses to decide crash-consistent vs. quiesced
+// -- as does CheckVMDiskConsistency's own caller outside Run
+// (internal/cli's status command), independently re-implementing the
+// same gate rather than sharing it with Run's, since the two callers
+// check tools state at different points for different reasons (Run:
+// immediately before/after its own snapshot/merge calls; status: once
+// per VM per invocation).
 func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []string) error {
 	var errs []error
 	for _, diskFile := range diskFiles {
@@ -70,6 +76,20 @@ func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []stri
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// CheckVMDiskConsistency reads vmxPath's connected disk devices and
+// verifies each one's snapshot chain via ctrl.CheckDiskConsistency,
+// joining every failure. Exported for callers outside Run's own
+// choreography (snapback status) that want the same check without
+// running a backup. Only meaningful -- and only safe to call -- while
+// the VM isn't running; see checkDisksConsistent's doc comment.
+func CheckVMDiskConsistency(ctrl vm.Controller, vmxPath string) error {
+	diskFiles, err := readDiskFiles(vmxPath)
+	if err != nil {
+		return err
+	}
+	return checkDisksConsistent(ctrl, filepath.Dir(vmxPath), diskFiles)
 }
 
 // checkCtx returns a *RunError tagged with stage if ctx is done, or nil
