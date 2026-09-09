@@ -9,24 +9,28 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/vm"
 )
 
 // statusDeps groups status's external dependencies so tests can
-// substitute a fake config loader, archive lister, and VM scanner
-// instead of touching the real filesystem.
+// substitute a fake config loader, archive lister, VM scanner, and
+// vm.Controller factory instead of touching the real filesystem.
 type statusDeps struct {
-	loadConfig   func(path string) (*config.Config, error)
-	listArchives func(destination string) ([]backup.Archive, error)
-	searchDirs   func() []string
-	discoverVMs  func(searchDirs []string) ([]discoveredVM, error)
+	loadConfig    func(path string) (*config.Config, error)
+	listArchives  func(destination string) ([]backup.Archive, error)
+	searchDirs    func() []string
+	discoverVMs   func(searchDirs []string) ([]discoveredVM, error)
+	newController func() (vm.Controller, error)
 }
 
 func newStatusCmd() *cobra.Command {
+	base := defaultVMCmdDeps()
 	return newStatusCmdWithDeps(statusDeps{
-		loadConfig:   config.Load,
-		listArchives: backup.ListArchives,
-		searchDirs:   defaultVMSearchDirs,
-		discoverVMs:  discoverVMs,
+		loadConfig:    config.Load,
+		listArchives:  backup.ListArchives,
+		searchDirs:    defaultVMSearchDirs,
+		discoverVMs:   discoverVMs,
+		newController: base.newController,
 	})
 }
 
@@ -69,13 +73,64 @@ func runStatus(cmd *cobra.Command, deps statusDeps, vmName string) error {
 	}
 
 	if vmName != "" {
-		return runStatusForVM(cmd, vmCfg, cfg.Retention, archives)
+		if err := runStatusForVM(cmd, vmCfg, cfg.Retention, archives); err != nil {
+			return err
+		}
+		return warnDamagedDiskChains(cmd, deps, []config.VM{vmCfg})
 	}
 
 	if err := warnUndiscoveredVMs(cmd, deps, cfg.VMs, configPath); err != nil {
 		return err
 	}
-	return runStatusSummary(cmd, cfg.VMs, archives)
+	// Print the summary table before running the (subprocess-backed, no
+	// per-call timeout -- see backup.CheckVMDiskConsistency's doc comment)
+	// disk-consistency checks below, so a slow or hung vmware-vdiskmanager
+	// call doesn't leave the user staring at zero output.
+	if err := runStatusSummary(cmd, cfg.VMs, archives); err != nil {
+		return err
+	}
+	return warnDamagedDiskChains(cmd, deps, cfg.VMs)
+}
+
+// warnDamagedDiskChains checks every configured VM's disk chain via
+// backup.CheckVMDiskConsistency, printing a loud warning: line to stderr
+// for any VM whose chain needs repair -- catching the incident recorded
+// in CLAUDE.md, where a merge vmcli reported as successful didn't
+// actually apply on disk and nothing surfaced it short of trying to
+// power the VM on. Skipped for a running VM: its disk files are locked
+// by the live vmware-vmx process, the same reason PR #62's preflight and
+// post-merge checks skip it (see backup.CheckVMDiskConsistency's doc
+// comment). A newController or CheckToolsState failure is reported the
+// same non-fatal way warnUndiscoveredVMs reports a scan failure, rather
+// than aborting status's core job of reporting backup state.
+func warnDamagedDiskChains(cmd *cobra.Command, deps statusDeps, vms []config.VM) error {
+	ctrl, err := deps.newController()
+	if err != nil {
+		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check disk consistency: %v\n", err)
+		return ferr
+	}
+
+	for _, vmCfg := range vms {
+		toolsState, err := ctrl.CheckToolsState(vmCfg.VMX)
+		if err != nil {
+			if _, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check disk consistency for %q: %v\n", vmCfg.Name, err); ferr != nil {
+				return ferr
+			}
+			continue
+		}
+		if toolsState == vm.ToolsRunning {
+			continue
+		}
+		if err := backup.CheckVMDiskConsistency(ctrl, vmCfg.VMX); err != nil {
+			_, ferr := fmt.Fprintf(cmd.ErrOrStderr(),
+				"warning: %q's disk chain needs repair: %v -- run \"vmware-vdiskmanager -R <disk>.vmdk\" or repair it from Fusion\n",
+				vmCfg.Name, err)
+			if ferr != nil {
+				return ferr
+			}
+		}
+	}
+	return nil
 }
 
 // warnUndiscoveredVMs cross-references VM discovery against cfg's

@@ -72,6 +72,20 @@ func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []stri
 	return errors.Join(errs...)
 }
 
+// CheckVMDiskConsistency reads vmxPath's connected disk devices and
+// verifies each one's snapshot chain via ctrl.CheckDiskConsistency,
+// joining every failure. Exported for callers outside Run's own
+// choreography (snapback status) that want the same check without
+// running a backup. Only meaningful -- and only safe to call -- while
+// the VM isn't running; see checkDisksConsistent's doc comment.
+func CheckVMDiskConsistency(ctrl vm.Controller, vmxPath string) error {
+	diskFiles, err := readDiskFiles(vmxPath)
+	if err != nil {
+		return err
+	}
+	return checkDisksConsistent(ctrl, filepath.Dir(vmxPath), diskFiles)
+}
+
 // checkCtx returns a *RunError tagged with stage if ctx is done, or nil
 // otherwise. Centralizes the ctx.Err() check Run performs at each stage
 // boundary so the only thing that varies per call site is which Stage to
