@@ -36,3 +36,19 @@ func TestDefaultConfigPathFor_HomeDirUnresolved_WarnsAndFallsBack(t *testing.T) 
 		t.Errorf("defaultConfigPathFor() warning = %q, want it to mention the fallback", warn.String())
 	}
 }
+
+// TestNewRootCmd_ConfigFlagDefaultIsEmpty guards against reintroducing
+// eager resolution: NewRootCmd must not call defaultConfigPath() while
+// registering the flag, since that fires the HOME-unresolved warning on
+// every invocation (--help, completion, etc.) even when --config is
+// always passed explicitly and the default is never consumed. See #28.
+func TestNewRootCmd_ConfigFlagDefaultIsEmpty(t *testing.T) {
+	root := NewRootCmd()
+	f := root.PersistentFlags().Lookup("config")
+	if f == nil {
+		t.Fatal("root has no \"config\" persistent flag")
+	}
+	if f.DefValue != "" {
+		t.Errorf("config flag DefValue = %q, want empty (default path resolved lazily, not at registration)", f.DefValue)
+	}
+}

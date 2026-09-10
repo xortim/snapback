@@ -46,6 +46,27 @@ func TestLoadConfigForCmd_MissingFile_FriendlyMessage(t *testing.T) {
 	}
 }
 
+// TestConfigPathForCmd_EmptyFlag_FallsBackToDefault covers the real
+// root.go wiring: the persistent flag's default is now "" (not resolved
+// at registration time, see #28), so configPathForCmd must compute the
+// default itself when the user never passed --config.
+func TestConfigPathForCmd_EmptyFlag_FallsBackToDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "", "")
+
+	path, err := configPathForCmd(cmd)
+	if err != nil {
+		t.Fatalf("configPathForCmd() error = %v, want nil", err)
+	}
+	want := defaultConfigPath()
+	if path != want {
+		t.Errorf("configPathForCmd() = %q, want default %q", path, want)
+	}
+}
+
 func TestLoadConfigForCmd_ReturnsConfigAndPath(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("config", "/some/path.yaml", "")
