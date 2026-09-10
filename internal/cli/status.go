@@ -371,7 +371,7 @@ func totalSizeLine(size string) string {
 
 // archiveStateCell renders one archive row's tools-state cell as an
 // icon-prefixed, palette-colored string -- the row-level counterpart to
-// consistencyLine, so a scan down the STATE column reads by color/icon
+// consistencyLine, so a scan down the TOOLS STATE column reads by color/icon
 // rather than requiring the raw tools_state string to be parsed. Must stay
 // the last (tab-unterminated) field in any row that uses it: tabwriter
 // pads columns by counting the raw bytes of a cell, including the
@@ -427,7 +427,7 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 	}
 
 	return renderTabwriterTable(out, func(w *tabwriter.Writer) error {
-		if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE"); err != nil {
+		if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tTOOLS STATE"); err != nil {
 			return err
 		}
 		for _, a := range vmArchives {

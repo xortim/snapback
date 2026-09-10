@@ -58,7 +58,7 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 	}
 
 	return renderTabwriterTable(out, func(w *tabwriter.Writer) error {
-		if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE\tSTATE"); err != nil {
+		if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE\tTOOLS STATE"); err != nil {
 			return err
 		}
 		for _, a := range archives {
