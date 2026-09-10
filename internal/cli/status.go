@@ -255,33 +255,35 @@ func totalArchiveSize(archives []backup.Archive) int64 {
 // a blank/zero one, so a newly configured VM reads as "needs a first
 // backup" rather than looking like a rendering bug.
 func runStatusSummary(cmd *cobra.Command, vms []config.VM, archives []backup.Archive) error {
-	w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "VM\tLAST BACKUP\tTOTAL SIZE\tBACKUPS"); err != nil {
-		return err
-	}
-	for _, vmCfg := range vms {
-		vmArchives := archivesForVM(archives, vmCfg.Name)
-
-		lastBackup := "no backups yet"
-		size := "-"
-		if len(vmArchives) > 0 {
-			lastBackup = vmArchives[0].Manifest.Timestamp.Local().Format(time.RFC3339)
-			size = formatSize(totalArchiveSize(vmArchives))
-		}
-
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\n",
-			sanitizeForTable(vmCfg.Name), lastBackup, size, len(vmArchives))
-		if err != nil {
+	err := renderTabwriterTable(cmd.OutOrStdout(), func(w *tabwriter.Writer) error {
+		if _, err := fmt.Fprintln(w, "VM\tLAST BACKUP\tTOTAL SIZE\tBACKUPS"); err != nil {
 			return err
 		}
-	}
-	if err := w.Flush(); err != nil {
+		for _, vmCfg := range vms {
+			vmArchives := archivesForVM(archives, vmCfg.Name)
+
+			lastBackup := "no backups yet"
+			size := "-"
+			if len(vmArchives) > 0 {
+				lastBackup = vmArchives[0].Manifest.Timestamp.Local().Format(time.RFC3339)
+				size = formatSize(totalArchiveSize(vmArchives))
+			}
+
+			_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%d\n",
+				sanitizeForTable(vmCfg.Name), lastBackup, size, len(vmArchives))
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	if len(vms) == 0 {
 		return nil
 	}
-	_, err := fmt.Fprintln(cmd.OutOrStdout(), "run `snapback status --vm <name>` for a VM's full history")
+	_, err = fmt.Fprintf(cmd.OutOrStdout(), "\n%s\n", style.Hint.Render("run `snapback status --vm <name>` for a VM's full history"))
 	return err
 }
 
@@ -412,19 +414,20 @@ func runStatusForVM(cmd *cobra.Command, vmCfg config.VM, retention config.Retent
 		return err
 	}
 
-	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE"); err != nil {
-		return err
-	}
-	for _, a := range vmArchives {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\n",
-			a.Manifest.Timestamp.Local().Format(time.RFC3339),
-			formatSize(a.Manifest.SizeBytes),
-			archiveStateCell(a.Manifest.ToolsState),
-		)
-		if err != nil {
+	return renderTabwriterTable(out, func(w *tabwriter.Writer) error {
+		if _, err := fmt.Fprintln(w, "TIMESTAMP\tSIZE\tSTATE"); err != nil {
 			return err
 		}
-	}
-	return w.Flush()
+		for _, a := range vmArchives {
+			_, err := fmt.Fprintf(w, "%s\t%s\t%s\n",
+				a.Manifest.Timestamp.Local().Format(time.RFC3339),
+				formatSize(a.Manifest.SizeBytes),
+				archiveStateCell(a.Manifest.ToolsState),
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

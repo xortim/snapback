@@ -22,4 +22,14 @@ var (
 	// Pending marks a step not yet reached -- dim rather than colored, per
 	// the spec's "Gray (dim)" row.
 	Pending = lipgloss.NewStyle().Faint(true)
+	// Header marks a tabwriter table's header row -- bold rather than
+	// colored, so it reads clearly against any terminal theme without
+	// picking a color that has to coexist with the semantic palette above.
+	Header = lipgloss.NewStyle().Bold(true)
+	// Hint marks de-emphasized footnote text below a table (e.g. a "run
+	// this other command" pointer) -- visually identical to Pending (dim
+	// rather than colored) but kept as its own name since the two mean
+	// different things: Pending is progress-state semantics, Hint is just
+	// "this line is a footnote, not data."
+	Hint = lipgloss.NewStyle().Faint(true)
 )
