@@ -2,9 +2,7 @@ package cli
 
 import (
 	"bytes"
-	"fmt"
 	"io"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/xortim/snapback/internal/style"
@@ -17,6 +15,12 @@ import (
 // width from the buffered, unstyled text -- bolding individual header
 // cells up front would inflate tabwriter's rune-count math with invisible
 // ANSI codes and misalign the header against the unstyled rows below it.
+//
+// writeRows must write its header via a line ending in "\n" (every
+// current caller does this with a leading fmt.Fprintln) before returning
+// -- renderTabwriterTable trusts that invariant rather than guarding
+// against a header-less buffer that can't occur with a well-formed
+// writeRows.
 func renderTabwriterTable(out io.Writer, writeRows func(w *tabwriter.Writer) error) error {
 	var buf bytes.Buffer
 	w := tabwriter.NewWriter(&buf, 0, 4, 2, ' ', 0)
@@ -27,11 +31,11 @@ func renderTabwriterTable(out io.Writer, writeRows func(w *tabwriter.Writer) err
 		return err
 	}
 
-	header, rest, found := strings.Cut(buf.String(), "\n")
-	if !found {
-		_, err := fmt.Fprint(out, style.Header.Render(header))
+	data := buf.Bytes()
+	i := bytes.IndexByte(data, '\n')
+	if _, err := io.WriteString(out, style.Header.Render(string(data[:i]))); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(out, "%s\n%s", style.Header.Render(header), rest)
+	_, err := out.Write(data[i:])
 	return err
 }

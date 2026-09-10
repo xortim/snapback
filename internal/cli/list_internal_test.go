@@ -14,6 +14,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/vm"
 )
 
 // newTestRootForList builds the real root command with a list subcommand
@@ -54,9 +55,10 @@ func TestListCmd_PrintsArchiveTable(t *testing.T) {
 				{
 					ArchiveID: "myvm-20260304T050607Z",
 					Manifest: backup.Manifest{
-						VMName:    "myvm",
-						SizeBytes: 2048,
-						Timestamp: ts,
+						VMName:     "myvm",
+						SizeBytes:  2048,
+						Timestamp:  ts,
+						ToolsState: vm.ToolsRunning,
 					},
 				},
 			}, nil
@@ -71,7 +73,7 @@ func TestListCmd_PrintsArchiveTable(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	got := out.String()
-	for _, want := range []string{"myvm-20260304T050607Z", "myvm", "2.0 KiB"} {
+	for _, want := range []string{"myvm-20260304T050607Z", "myvm", "2.0 KiB", "STATE", string(vm.ToolsRunning)} {
 		if !strings.Contains(got, want) {
 			t.Errorf("stdout = %q, want it to contain %q", got, want)
 		}

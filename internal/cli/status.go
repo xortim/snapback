@@ -372,10 +372,22 @@ func totalSizeLine(size string) string {
 // archiveStateCell renders one archive row's tools-state cell as an
 // icon-prefixed, palette-colored string -- the row-level counterpart to
 // consistencyLine, so a scan down the STATE column reads by color/icon
-// rather than requiring the raw tools_state string to be parsed.
+// rather than requiring the raw tools_state string to be parsed. Must stay
+// the last (tab-unterminated) field in any row that uses it: tabwriter
+// pads columns by counting the raw bytes of a cell, including the
+// invisible ANSI codes from style.Done/Degraded.Render, so a colored cell
+// followed by another column would misalign everything to its right.
+//
+// An empty toolsState (a manifest.json field that's missing or blank --
+// possible for a hand-edited or externally-corrupted manifest, since
+// ListArchives doesn't validate tools_state's value) renders as "unknown"
+// rather than a bare, unexplained icon.
 func archiveStateCell(toolsState vm.ToolsState) string {
 	if toolsState == vm.ToolsRunning {
 		return style.Done.Render("✓ " + string(toolsState))
+	}
+	if toolsState == "" {
+		toolsState = "unknown"
 	}
 	return style.Degraded.Render("⚠ " + string(toolsState))
 }
