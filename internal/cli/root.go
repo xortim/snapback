@@ -15,7 +15,12 @@ func NewRootCmd() *cobra.Command {
 		Short: "Zero-downtime backup manager for VMware Fusion VMs",
 	}
 
-	root.PersistentFlags().String("config", defaultConfigPath(), "path to config file")
+	// Default left empty rather than calling defaultConfigPath() here: that
+	// would resolve (and warn on) the home directory at flag-registration
+	// time, on every invocation, even ones that never consume it (--help,
+	// completion, or explicit --config). configPathForCmd resolves the
+	// default lazily, only when a command actually needs it. See #28.
+	root.PersistentFlags().String("config", "", "path to config file (default \"~/.config/snapback/config.yaml\")")
 
 	root.AddCommand(
 		newInitCmd(),

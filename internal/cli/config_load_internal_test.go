@@ -46,6 +46,44 @@ func TestLoadConfigForCmd_MissingFile_FriendlyMessage(t *testing.T) {
 	}
 }
 
+// TestConfigPathForCmd_EmptyFlag_FallsBackToDefault covers the real
+// root.go wiring: the persistent flag's default is now "" (not resolved
+// at registration time, see #28), so configPathForCmd must compute the
+// default itself when the user never passed --config.
+func TestConfigPathForCmd_EmptyFlag_FallsBackToDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "", "")
+
+	path, err := configPathForCmd(cmd)
+	if err != nil {
+		t.Fatalf("configPathForCmd() error = %v, want nil", err)
+	}
+	want := defaultConfigPath()
+	if path != want {
+		t.Errorf("configPathForCmd() = %q, want default %q", path, want)
+	}
+}
+
+// TestConfigPathForCmd_ExplicitEmptyFlag_ReturnsError covers the
+// distinction Flags().Changed makes: --config="" is a user error, not the
+// same as omitting the flag, so it must not silently fall back to the
+// default path.
+func TestConfigPathForCmd_ExplicitEmptyFlag_ReturnsError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "", "")
+	if err := cmd.Flags().Set("config", ""); err != nil {
+		t.Fatalf("Set(\"config\", \"\") error = %v", err)
+	}
+
+	_, err := configPathForCmd(cmd)
+	if err == nil {
+		t.Fatal("configPathForCmd() error = nil, want an error for explicit empty --config")
+	}
+}
+
 func TestLoadConfigForCmd_ReturnsConfigAndPath(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("config", "/some/path.yaml", "")
