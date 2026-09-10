@@ -67,6 +67,23 @@ func TestConfigPathForCmd_EmptyFlag_FallsBackToDefault(t *testing.T) {
 	}
 }
 
+// TestConfigPathForCmd_ExplicitEmptyFlag_ReturnsError covers the
+// distinction Flags().Changed makes: --config="" is a user error, not the
+// same as omitting the flag, so it must not silently fall back to the
+// default path.
+func TestConfigPathForCmd_ExplicitEmptyFlag_ReturnsError(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "", "")
+	if err := cmd.Flags().Set("config", ""); err != nil {
+		t.Fatalf("Set(\"config\", \"\") error = %v", err)
+	}
+
+	_, err := configPathForCmd(cmd)
+	if err == nil {
+		t.Fatal("configPathForCmd() error = nil, want an error for explicit empty --config")
+	}
+}
+
 func TestLoadConfigForCmd_ReturnsConfigAndPath(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("config", "/some/path.yaml", "")

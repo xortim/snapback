@@ -12,17 +12,22 @@ import (
 
 // configPathForCmd reads the --config persistent flag. Shared by every
 // subcommand that needs the config path, whether or not the config file
-// exists yet (init doesn't require it to; run/list/status do). An empty
-// flag value means --config wasn't passed, so the default is resolved
-// here instead of at flag-registration time -- deferring it this way
-// means the HOME-unresolved warning only fires for commands that
-// actually consume the default. See #28.
+// exists yet (init doesn't require it to; run/list/status do). The flag's
+// own default is left empty so the default path is resolved here instead
+// of at flag-registration time -- deferring it this way means the
+// HOME-unresolved warning only fires for commands that actually consume
+// the default. See #28. Flags().Changed distinguishes an omitted flag
+// (fall back to the default) from an explicit --config="" (a user error,
+// not a silent fallback).
 func configPathForCmd(cmd *cobra.Command) (string, error) {
 	path, err := cmd.Flags().GetString("config")
 	if err != nil {
 		return "", err
 	}
 	if path == "" {
+		if cmd.Flags().Changed("config") {
+			return "", errors.New("--config: path must not be empty")
+		}
 		path = defaultConfigPath()
 	}
 	return path, nil
