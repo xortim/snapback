@@ -233,8 +233,8 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 		t.Fatalf("Execute() error = %v, want nil", err)
 	}
 	lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
-	if len(lines) != 4 {
-		t.Fatalf("stdout had %d lines, want 4 (header + 2 VM rows + drill-down footer): %q", len(lines), out.String())
+	if len(lines) != 5 {
+		t.Fatalf("stdout had %d lines, want 5 (header + 2 VM rows + blank separator + drill-down footer): %q", len(lines), out.String())
 	}
 	backedUpRow := lines[1]
 	for _, want := range []string{"backed-up-vm", ts2.Local().Format(time.RFC3339), "4.0 KiB", "2"} {
@@ -249,8 +249,11 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 	if !strings.Contains(neverBackedUpRow, "never-backed-up-vm") || !strings.Contains(neverBackedUpRow, "no backups yet") {
 		t.Errorf("never-backed-up-vm row = %q, want VM name and \"no backups yet\"", neverBackedUpRow)
 	}
-	if !strings.Contains(lines[3], "status --vm") {
-		t.Errorf("footer line = %q, want a hint pointing at the status --vm drill-down", lines[3])
+	if lines[3] != "" {
+		t.Errorf("line 4 = %q, want a blank separator between the table and the footer", lines[3])
+	}
+	if !strings.Contains(lines[4], "status --vm") {
+		t.Errorf("footer line = %q, want a hint pointing at the status --vm drill-down", lines[4])
 	}
 }
 

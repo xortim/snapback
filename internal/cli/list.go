@@ -57,22 +57,24 @@ func runList(cmd *cobra.Command, deps listDeps) error {
 		return err
 	}
 
-	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE"); err != nil {
-		return err
-	}
-	for _, a := range archives {
-		_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-			sanitizeForTable(a.ArchiveID),
-			sanitizeForTable(a.Manifest.VMName),
-			a.Manifest.Timestamp.Local().Format(time.RFC3339),
-			formatSize(a.Manifest.SizeBytes),
-		)
-		if err != nil {
+	return renderTabwriterTable(out, func(w *tabwriter.Writer) error {
+		if _, err := fmt.Fprintln(w, "ARCHIVE ID\tVM\tTIMESTAMP\tSIZE\tTOOLS STATE"); err != nil {
 			return err
 		}
-	}
-	return w.Flush()
+		for _, a := range archives {
+			_, err := fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+				sanitizeForTable(a.ArchiveID),
+				sanitizeForTable(a.Manifest.VMName),
+				a.Manifest.Timestamp.Local().Format(time.RFC3339),
+				formatSize(a.Manifest.SizeBytes),
+				archiveStateCell(a.Manifest.ToolsState),
+			)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // formatSize renders n bytes as a human-readable IEC size (KiB/MiB/...),
