@@ -39,6 +39,13 @@ type Result struct {
 	Manifest     Manifest
 }
 
+// Summary implements internal/tui's pipelineResult interface, letting the
+// generalized Model render either a completed Run or a completed Restore
+// without a type switch.
+func (r *Result) Summary() string {
+	return fmt.Sprintf("backup complete: %s", r.ArchivePath)
+}
+
 // checkDisksConsistent runs ctrl.CheckDiskConsistency against every disk
 // in diskFiles (as returned by readDiskFiles, resolved against bundleDir
 // unless a diskFile is itself already absolute -- Fusion permits a disk
