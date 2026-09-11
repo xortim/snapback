@@ -18,21 +18,29 @@ const (
 	Checksumming
 	Pruning
 	Notifying
+	Verifying
+	Extracting
+	CheckingDiskConsistency
+	Placing
 	Done
 )
 
 // stageNames is indexed by Stage; must stay in sync with the const block
 // above.
 var stageNames = [...]string{
-	CheckingTools: "checking tools",
-	Snapshotting:  "snapshotting",
-	Copying:       "copying",
-	Merging:       "merging",
-	Compressing:   "compressing",
-	Checksumming:  "checksumming",
-	Pruning:       "pruning",
-	Notifying:     "notifying",
-	Done:          "done",
+	CheckingTools:           "checking tools",
+	Snapshotting:            "snapshotting",
+	Copying:                 "copying",
+	Merging:                 "merging",
+	Compressing:             "compressing",
+	Checksumming:            "checksumming",
+	Pruning:                 "pruning",
+	Notifying:               "notifying",
+	Verifying:               "verifying",
+	Extracting:              "extracting",
+	CheckingDiskConsistency: "checking disk consistency",
+	Placing:                 "placing",
+	Done:                    "done",
 }
 
 // String returns a human-readable label for s, or "stage(N)" for an

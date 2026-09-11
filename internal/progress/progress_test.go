@@ -21,6 +21,10 @@ func TestStages_AreDistinctValues(t *testing.T) {
 		progress.Checksumming,
 		progress.Pruning,
 		progress.Notifying,
+		progress.Verifying,
+		progress.Extracting,
+		progress.CheckingDiskConsistency,
+		progress.Placing,
 		progress.Done,
 	}
 	seen := map[progress.Stage]bool{}
@@ -30,17 +34,21 @@ func TestStages_AreDistinctValues(t *testing.T) {
 		}
 		seen[s] = true
 	}
-	if len(seen) != 9 {
-		t.Errorf("got %d distinct stages, want 9", len(seen))
+	if len(seen) != 13 {
+		t.Errorf("got %d distinct stages, want 13", len(seen))
 	}
 }
 
 func TestStage_String(t *testing.T) {
 	cases := map[progress.Stage]string{
-		progress.CheckingTools: "checking tools",
-		progress.Snapshotting:  "snapshotting",
-		progress.Done:          "done",
-		progress.Stage(99):     "stage(99)",
+		progress.CheckingTools:           "checking tools",
+		progress.Snapshotting:            "snapshotting",
+		progress.Verifying:               "verifying",
+		progress.Extracting:              "extracting",
+		progress.CheckingDiskConsistency: "checking disk consistency",
+		progress.Placing:                 "placing",
+		progress.Done:                    "done",
+		progress.Stage(99):               "stage(99)",
 	}
 	for stage, want := range cases {
 		if got := stage.String(); got != want {

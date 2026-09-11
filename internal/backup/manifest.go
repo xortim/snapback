@@ -41,6 +41,15 @@ func writeManifest(path string, m Manifest) error {
 // sha256File returns the lowercase hex-encoded SHA-256 digest of the file
 // at path.
 func sha256File(path string) (string, error) {
+	return hashFile(path, nil)
+}
+
+// hashFile returns the lowercase hex-encoded SHA-256 digest of the file at
+// path, same as sha256File, but additionally invokes onRead (if non-nil)
+// with the running cumulative bytes read -- shared by sha256File
+// (Run's Checksumming stage, no progress needed) and Restore's Verifying
+// stage (restore.go), which does.
+func hashFile(path string, onRead func(cumulative int64)) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return "", fmt.Errorf("open %s: %w", path, err)
@@ -48,8 +57,29 @@ func sha256File(path string) (string, error) {
 	defer func() { _ = f.Close() }()
 
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	var r io.Reader = f
+	if onRead != nil {
+		r = &countingReader{r: f, onRead: onRead}
+	}
+	if _, err := io.Copy(h, r); err != nil {
 		return "", fmt.Errorf("hash %s: %w", path, err)
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
+}
+
+// countingReader wraps an io.Reader, invoking onRead with the running
+// cumulative byte count as bytes are read through it.
+type countingReader struct {
+	r          io.Reader
+	onRead     func(cumulative int64)
+	cumulative int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.cumulative += int64(n)
+	if n > 0 && c.onRead != nil {
+		c.onRead(c.cumulative)
+	}
+	return n, err
 }

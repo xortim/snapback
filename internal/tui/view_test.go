@@ -11,7 +11,7 @@ import (
 )
 
 func TestView_PendingStageShowsCircleIcon(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	view := m.View()
 	if !strings.Contains(view, "○ checking tools") {
 		t.Errorf("view = %q, want a pending-icon row for checking tools", view)
@@ -19,7 +19,7 @@ func TestView_PendingStageShowsCircleIcon(t *testing.T) {
 }
 
 func TestView_ActiveStageShowsMessage(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Snapshotting, Message: "taking snapshot snapback-x"}))
 	m = updated.(Model)
 	view := m.View()
@@ -32,7 +32,7 @@ func TestView_ActiveStageShowsMessage(t *testing.T) {
 }
 
 func TestView_CopyingWithPercent_ShowsProgressBar(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Copying, Message: "copying VM bundle to staging"}))
 	m = updated.(Model)
 	updated, _ = m.Update(eventMsg(progress.Event{Stage: progress.Copying, Percent: 0.5}))
@@ -45,7 +45,7 @@ func TestView_CopyingWithPercent_ShowsProgressBar(t *testing.T) {
 }
 
 func TestView_Success_ShowsArchivePath(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(resultMsg{result: &backup.Result{ArchivePath: "/dest/myvm-x/archive.tar.zst"}})
 	m = updated.(Model)
 
@@ -65,18 +65,18 @@ func TestView_Success_ShowsArchivePath(t *testing.T) {
 // caller's backupFn from doing it. View() must not dereference
 // m.result.ArchivePath without checking m.result first.
 func TestView_Success_NilResult_DoesNotPanic(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(resultMsg{result: nil, err: nil})
 	m = updated.(Model)
 
 	view := m.View()
-	if !strings.Contains(view, "backup complete") {
+	if !strings.Contains(view, "complete") {
 		t.Errorf("view = %q, want a completion line even with a nil result", view)
 	}
 }
 
 func TestView_Failure_ShowsErrorAndCrossIcon(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Merging, Message: "merging snapshot back"}))
 	m = updated.(Model)
 	updated, _ = m.Update(resultMsg{err: &backup.RunError{Stage: progress.Merging, Err: errBoom}})
@@ -92,7 +92,7 @@ func TestView_Failure_ShowsErrorAndCrossIcon(t *testing.T) {
 }
 
 func TestView_Cancelling_ShowsCancellingNotice(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = updated.(Model)
 

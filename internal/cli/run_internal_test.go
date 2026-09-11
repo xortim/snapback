@@ -40,7 +40,8 @@ func writeVMBundle(t *testing.T) (vmxPath string) {
 		t.Fatalf("mkdir bundle: %v", err)
 	}
 	vmxPath = filepath.Join(bundle, "myvm.vmx")
-	if err := os.WriteFile(vmxPath, []byte("guestOS = \"ubuntu-64\"\n"), 0o644); err != nil {
+	vmxContent := "guestOS = \"ubuntu-64\"\nscsi0:0.fileName = \"disk.vmdk\"\n"
+	if err := os.WriteFile(vmxPath, []byte(vmxContent), 0o644); err != nil {
 		t.Fatalf("write vmx: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(bundle, "disk.vmdk"), []byte("fake disk"), 0o644); err != nil {

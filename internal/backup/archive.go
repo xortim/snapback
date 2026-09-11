@@ -17,6 +17,17 @@ import (
 // the tests.
 var lookZstd = func() (string, error) { return exec.LookPath("zstd") }
 
+// archiveExt returns the file extension for an archive compressed with the
+// given method (as recorded in Manifest.Compression / returned by
+// createArchive) -- shared by Run and Restore so both name the archive
+// file the same way.
+func archiveExt(compression string) string {
+	if compression == "zstd" {
+		return "tar.zst"
+	}
+	return "tar.gz"
+}
+
 // createArchive tars srcDir's contents and compresses the result to
 // destPath. requested is "zstd", "gzip", or "" (prefer zstd, fall back to
 // gzip if the zstd binary isn't on PATH). Returns which compression was

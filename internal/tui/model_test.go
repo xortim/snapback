@@ -18,9 +18,9 @@ import (
 var errBoom = errors.New("boom")
 
 func TestNewModel_StartsAllRowsPending(t *testing.T) {
-	m := newModel("myvm", func() {})
-	if len(m.rows) != len(stages) {
-		t.Fatalf("len(rows) = %d, want %d", len(m.rows), len(stages))
+	m := newRunModel("myvm", func() {})
+	if len(m.rows) != len(runStages) {
+		t.Fatalf("len(rows) = %d, want %d", len(m.rows), len(runStages))
 	}
 	for _, row := range m.rows {
 		if row.status != pending {
@@ -30,7 +30,7 @@ func TestNewModel_StartsAllRowsPending(t *testing.T) {
 }
 
 func TestUpdate_EventMsg_MarksActiveAndPriorStagesDone(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Snapshotting, Message: "taking snapshot x"}))
 	m = updated.(Model)
 
@@ -56,7 +56,7 @@ func TestUpdate_EventMsg_MarksActiveAndPriorStagesDone(t *testing.T) {
 }
 
 func TestUpdate_EventMsg_PercentOnlyUpdatesBarWithoutClearingMessage(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Copying, Message: "copying VM bundle to staging"}))
 	m = updated.(Model)
 	updated, _ = m.Update(eventMsg(progress.Event{Stage: progress.Copying, Percent: 0.42}))
@@ -81,7 +81,7 @@ func TestUpdate_EventMsg_PercentOnlyUpdatesBarWithoutClearingMessage(t *testing.
 // after retry" event mid-Copying. Applying that event's zero Percent
 // would visibly snap the bar back to 0%.
 func TestUpdate_EventMsg_MessageBearingEventDoesNotResetPercent(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Copying, Message: "copying VM bundle to staging"}))
 	m = updated.(Model)
 	updated, _ = m.Update(eventMsg(progress.Event{Stage: progress.Copying, Percent: 0.75}))
@@ -95,7 +95,7 @@ func TestUpdate_EventMsg_MessageBearingEventDoesNotResetPercent(t *testing.T) {
 }
 
 func TestUpdate_ResultMsg_Success_MarksAllRowsDone(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, cmd := m.Update(resultMsg{result: &backup.Result{ArchivePath: "/dest/myvm-x/archive.tar.zst"}})
 	m = updated.(Model)
 
@@ -113,7 +113,7 @@ func TestUpdate_ResultMsg_Success_MarksAllRowsDone(t *testing.T) {
 }
 
 func TestUpdate_ResultMsg_Failure_MarksMatchingStageFailed(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	// Advance to Merging first, as a real run would.
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Merging, Message: "merging snapshot back"}))
 	m = updated.(Model)
@@ -144,7 +144,7 @@ func TestUpdate_ResultMsg_Failure_MarksMatchingStageFailed(t *testing.T) {
 }
 
 func TestUpdate_ResultMsg_FailureBeforeAnyDisplayedStage_MarksFirstRowFailed(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	// ctx canceled before Run ever reported CheckingTools.
 	runErr := &backup.RunError{Stage: progress.CheckingTools, Err: context.Canceled}
 	updated, _ := m.Update(resultMsg{err: runErr})
@@ -157,7 +157,7 @@ func TestUpdate_ResultMsg_FailureBeforeAnyDisplayedStage_MarksFirstRowFailed(t *
 
 func TestUpdate_CtrlC_CallsCancelAndSetsCancelling(t *testing.T) {
 	var canceled bool
-	m := newModel("myvm", func() { canceled = true })
+	m := newRunModel("myvm", func() { canceled = true })
 
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
 	m = updated.(Model)
@@ -172,7 +172,7 @@ func TestUpdate_CtrlC_CallsCancelAndSetsCancelling(t *testing.T) {
 
 func TestUpdate_CtrlC_AfterFinished_DoesNotCallCancel(t *testing.T) {
 	var canceled bool
-	m := newModel("myvm", func() { canceled = true })
+	m := newRunModel("myvm", func() { canceled = true })
 	updated, _ := m.Update(resultMsg{result: &backup.Result{}})
 	m = updated.(Model)
 
@@ -184,7 +184,7 @@ func TestUpdate_CtrlC_AfterFinished_DoesNotCallCancel(t *testing.T) {
 }
 
 func TestUpdate_Tick_AdvancesElapsedAndReschedules(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	m.start = time.Now().Add(-5 * time.Second)
 
 	updated, cmd := m.Update(tickMsg(time.Now()))
@@ -199,7 +199,7 @@ func TestUpdate_Tick_AdvancesElapsedAndReschedules(t *testing.T) {
 }
 
 func TestUpdate_Tick_AfterFinished_DoesNotReschedule(t *testing.T) {
-	m := newModel("myvm", func() {})
+	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(resultMsg{result: &backup.Result{}})
 	m = updated.(Model)
 

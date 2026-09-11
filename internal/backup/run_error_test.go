@@ -33,3 +33,10 @@ func TestRunError_UnwrapAndErrorsAs(t *testing.T) {
 		t.Errorf("runErr.Stage = %v, want %v", runErr.Stage, progress.Copying)
 	}
 }
+
+func TestRunError_FailedStage(t *testing.T) {
+	err := &backup.RunError{Stage: progress.Merging, Err: errors.New("boom")}
+	if got := err.FailedStage(); got != progress.Merging {
+		t.Errorf("FailedStage() = %v, want %v", got, progress.Merging)
+	}
+}

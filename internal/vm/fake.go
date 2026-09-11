@@ -18,6 +18,11 @@ type FakeVMController struct {
 	DeleteSnapshotErr  error
 	DiskConsistencyErr error
 
+	// DiskConsistencyCalls records every diskPath passed to
+	// CheckDiskConsistency, in call order -- lets tests assert the right
+	// disk was checked, not merely that some disk was.
+	DiskConsistencyCalls []string
+
 	snapshots map[string][]string
 }
 
@@ -85,5 +90,6 @@ func (f *FakeVMController) DeleteSnapshots(vmxPath string, names []string) (dele
 }
 
 func (f *FakeVMController) CheckDiskConsistency(diskPath string) error {
+	f.DiskConsistencyCalls = append(f.DiskConsistencyCalls, diskPath)
 	return f.DiskConsistencyErr
 }

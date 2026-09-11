@@ -39,6 +39,13 @@ type Result struct {
 	Manifest     Manifest
 }
 
+// Summary implements internal/tui's pipelineResult interface, letting the
+// generalized Model render either a completed Run or a completed Restore
+// without a type switch.
+func (r *Result) Summary() string {
+	return fmt.Sprintf("backup complete: %s", r.ArchivePath)
+}
+
 // checkDisksConsistent runs ctrl.CheckDiskConsistency against every disk
 // in diskFiles (as returned by readDiskFiles, resolved against bundleDir
 // unless a diskFile is itself already absolute -- Fusion permits a disk
@@ -64,6 +71,9 @@ type Result struct {
 // immediately before/after its own snapshot/merge calls; status: once
 // per VM per invocation).
 func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []string) error {
+	if len(diskFiles) == 0 {
+		return fmt.Errorf("no virtual disks found in %s -- cannot verify disk chain consistency", bundleDir)
+	}
 	var errs []error
 	for _, diskFile := range diskFiles {
 		diskPath := diskFile
@@ -92,9 +102,10 @@ func CheckVMDiskConsistency(ctrl vm.Controller, vmxPath string) error {
 }
 
 // checkCtx returns a *RunError tagged with stage if ctx is done, or nil
-// otherwise. Centralizes the ctx.Err() check Run performs at each stage
-// boundary so the only thing that varies per call site is which Stage to
-// tag -- see the design doc's discussion of this exact copy-paste risk.
+// otherwise. Centralizes the ctx.Err() check Run and Restore (restore.go)
+// each perform at their own stage boundaries so the only thing that varies
+// per call site is which Stage to tag -- see the design doc's discussion
+// of this exact copy-paste risk.
 func checkCtx(ctx context.Context, stage progress.Stage) *RunError {
 	if err := ctx.Err(); err != nil {
 		return &RunError{Stage: stage, Err: err}
@@ -370,11 +381,7 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	if err != nil {
 		return nil, &RunError{Stage: progress.Compressing, Err: fmt.Errorf("create archive: %w", err)}
 	}
-	ext := "tar.gz"
-	if usedCompression == "zstd" {
-		ext = "tar.zst"
-	}
-	archivePath := filepath.Join(outputDir, "archive."+ext)
+	archivePath := filepath.Join(outputDir, "archive."+archiveExt(usedCompression))
 	if err := os.Rename(tempArchivePath, archivePath); err != nil {
 		return nil, &RunError{Stage: progress.Compressing, Err: fmt.Errorf("rename archive: %w", err)}
 	}
