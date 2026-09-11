@@ -411,6 +411,13 @@ func untarFromZstd(in io.Reader, destDir string, onWrite func(cumulativeBytes in
 	}
 
 	untarErr := untarFrom(stdout, destDir, onWrite)
+	// Drain any remaining decompressed output before waiting -- if untarFrom
+	// returned early (a path-traversal rejection or a corrupt tar header),
+	// zstd may still be mid-write with more decompressed data than the OS
+	// pipe buffer holds; without draining, that write() blocks forever and
+	// cmd.Wait() below never returns. Once untarFrom has stopped reading,
+	// the content no longer matters, so discarding it is correct either way.
+	_, _ = io.Copy(io.Discard, stdout)
 	waitErr := cmd.Wait()
 
 	if waitErr != nil {
@@ -451,6 +458,19 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 				return fmt.Errorf("mkdir %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
+			// isWithinDir above only confirmed the symlink's own location
+			// (hdr.Name) stays under destDir -- it says nothing about where
+			// the link points. An absolute Linkname, or a relative one that
+			// resolves outside destDir, would let a later entry (validated
+			// only lexically against its own name) actually land outside
+			// destDir on disk by writing through this link. Reject both.
+			if filepath.IsAbs(hdr.Linkname) {
+				return fmt.Errorf("tar entry %q has an absolute symlink target %q, which could escape the destination directory", hdr.Name, hdr.Linkname)
+			}
+			linkTarget := filepath.Join(filepath.Dir(target), filepath.FromSlash(hdr.Linkname))
+			if !isWithinDir(destDir, linkTarget) {
+				return fmt.Errorf("tar entry %q's symlink target %q escapes destination directory", hdr.Name, hdr.Linkname)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
 			}
