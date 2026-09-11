@@ -1,8 +1,9 @@
 # snapback
 
 Zero-downtime backup manager for VMware Fusion VMs on macOS. Snapshot,
-copy, checksum, prune — scheduled via `launchd`, controlled from the
-menu bar via xbar.
+copy, checksum, restore today — `launchd` scheduling, retention
+pruning, and an xbar menu-bar plugin are next (see Status/Roadmap
+below).
 
 Built because [Vimalin](https://www.vimalin.com/) is GUI-only shareware
 and opaque about what it's actually doing. This does the same job —
