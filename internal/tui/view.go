@@ -35,11 +35,19 @@ func (m Model) View() string {
 		b.WriteString(style.Degraded.Render("cancelling... (waiting for the current step to finish)") + "\n")
 	}
 	if m.finished {
-		if m.err == nil && m.result != nil {
+		switch {
+		case m.err == nil && m.result != nil:
 			b.WriteString(style.Done.Render(m.result.Summary()) + "\n")
-		} else if m.err == nil {
+		case m.err == nil:
 			b.WriteString(style.Done.Render("complete") + "\n")
-		} else {
+		case !slices.ContainsFunc(m.rows, func(r stageRow) bool { return r.status == failed }):
+			// applyFinalStatus always marks some row failed with the full
+			// error message when m.rows is non-empty (the case for every
+			// real run/restore stage list) -- this line is a fallback for
+			// the only scenario where that doesn't happen (an empty rows
+			// list), not a normal-path summary. Printing it unconditionally
+			// duplicated the failed row's own message verbatim underneath
+			// it on every failure (confirmed real case, 2026-09-11).
 			b.WriteString(style.Failed.Render(fmt.Sprintf("error: %v", m.err)) + "\n")
 		}
 	}
