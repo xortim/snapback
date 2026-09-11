@@ -104,6 +104,19 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			return fmt.Errorf("read tar entry: %w", err)
 		}
 
+		// Older archives (created before createArchive started excluding
+		// these) may still carry a Fusion "<file>.lck" directory copied
+		// from the live source VM -- process-specific lock state that's
+		// meaningless once restored elsewhere, and actively harmful:
+		// vmware-vdiskmanager -e mistakes a restored, stale lock directory
+		// for one another process already has the disk open, failing the
+		// post-extraction disk consistency check over nothing (confirmed
+		// real case, 2026-09-11). Drop any such entry on extraction too,
+		// so an archive made before that fix still restores cleanly.
+		if hasLockDirComponent(hdr.Name) {
+			continue
+		}
+
 		target := filepath.Join(destDir, filepath.FromSlash(hdr.Name))
 		if !isWithinDir(destDir, target) {
 			return fmt.Errorf("tar entry %q escapes destination directory", hdr.Name)
@@ -157,6 +170,18 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			// rather than fail the whole restore over it.
 		}
 	}
+}
+
+// hasLockDirComponent reports whether any "/"-separated component of a tar
+// entry's name is a Fusion lock directory ("<file>.lck") -- see untarFrom's
+// call site.
+func hasLockDirComponent(name string) bool {
+	for _, part := range strings.Split(strings.Trim(name, "/"), "/") {
+		if strings.HasSuffix(part, ".lck") {
+			return true
+		}
+	}
+	return false
 }
 
 // isWithinDir reports whether target, once resolved relative to dir,

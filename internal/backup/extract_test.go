@@ -183,6 +183,59 @@ func TestExtractArchive_RegularFileSetuidBit_IsMaskedOnExtraction(t *testing.T) 
 	}
 }
 
+func TestExtractArchive_ExcludesFusionLockDirectories(t *testing.T) {
+	// An archive created before createArchive started excluding Fusion's
+	// "<file>.lck" lock directories -- extraction must still drop them so
+	// old archives restore cleanly (see hasLockDirComponent's doc comment).
+	archivePath := filepath.Join(t.TempDir(), "with-lock-dir.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	entries := []struct {
+		name     string
+		typeflag byte
+		content  string
+	}{
+		{"disk.vmdk", tar.TypeReg, "disk contents"},
+		{"disk.vmdk.lck/", tar.TypeDir, ""},
+		{"disk.vmdk.lck/M12345.lck", tar.TypeReg, "stale lock"},
+	}
+	for _, e := range entries {
+		hdr := &tar.Header{Name: e.name, Size: int64(len(e.content)), Mode: 0o644, Typeflag: e.typeflag}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("write tar header %q: %v", e.name, err)
+		}
+		if e.content != "" {
+			if _, err := tw.Write([]byte(e.content)); err != nil {
+				t.Fatalf("write tar content %q: %v", e.name, err)
+			}
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err != nil {
+		t.Fatalf("extractArchive() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "disk.vmdk")); err != nil {
+		t.Errorf("disk.vmdk missing, want it extracted: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "disk.vmdk.lck")); !os.IsNotExist(err) {
+		t.Errorf("disk.vmdk.lck exists (err=%v), want it excluded from extraction", err)
+	}
+}
+
 func TestExtractArchive_SymlinkAbsoluteTarget_IsRejected(t *testing.T) {
 	// Hand-craft a tar.gz with a symlink whose target is absolute (e.g. /etc/passwd).
 	// extractArchive must reject this rather than create it.

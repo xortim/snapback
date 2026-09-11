@@ -13,6 +13,50 @@ import (
 	"testing"
 )
 
+func TestCreateArchive_ExcludesFusionLockDirectories(t *testing.T) {
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "disk.vmdk"), []byte("disk contents"), 0o644); err != nil {
+		t.Fatalf("write disk.vmdk: %v", err)
+	}
+	lockDir := filepath.Join(srcDir, "disk.vmdk.lck")
+	if err := os.MkdirAll(lockDir, 0o700); err != nil {
+		t.Fatalf("mkdir lock dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lockDir, "M12345.lck"), []byte("stale lock"), 0o644); err != nil {
+		t.Fatalf("write lock file: %v", err)
+	}
+	destPath := filepath.Join(t.TempDir(), "archive.tar.gz")
+
+	if _, err := createArchive(srcDir, destPath, "gzip", nil); err != nil {
+		t.Fatalf("createArchive() error = %v, want nil", err)
+	}
+
+	f, err := os.Open(destPath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("gzip.NewReader: %v", err)
+	}
+	defer func() { _ = gz.Close() }()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read tar entry: %v", err)
+		}
+		if strings.Contains(hdr.Name, ".lck") {
+			t.Errorf("archive contains lock-directory entry %q, want it excluded", hdr.Name)
+		}
+	}
+}
+
 func TestCreateArchive_GzipWhenZstdUnavailable(t *testing.T) {
 	restore := lookZstd
 	lookZstd = func() (string, error) { return "", errors.New("not found") }
