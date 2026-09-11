@@ -95,7 +95,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback run --vm <name>`      | On-demand backup of one VM                                                                       |
 | `snapback run --all`            | Backup every VM in config (used by launchd)                                                      |
 | `snapback list`                 | List backup archives with timestamp, size                                                        |
-| `snapback restore <archive-id>` | Restore to a new `.vmwarevm`, suffixed `- backup yyyy-mm-dd`, never overwrites source            |
+| `snapback restore <archive-id>` / `snapback restore --vm <name> --latest [--dest <dir>]` | Restore to a new `.vmwarevm`, suffixed `- backup yyyy-mm-dd`, never overwrites source; `--vm`/`--latest` resolves the newest archive for a configured VM instead of naming an archive-id directly, and `--dest <dir>` overrides the inferred target parent directory |
 | `snapback status`               | Human-readable status: last run, next scheduled run, disk usage                                  |
 | `snapback status --vm <name>`   | Drill into a single VM: full consistency detail, disk usage, retention policy                    |
 | `snapback status --xbar`        | Same data, formatted for xbar plugin consumption                                                 |
@@ -170,7 +170,7 @@ xbar/SwiftBar gets you 90% of the value — a menu bar icon, a dropdown, click-t
 
 - [x] **Phase 1 — Core CLI:** `vmcli` chosen and confirmed as the backing tool, the `VMController` interface (fake + real `vmcli`-backed implementations), and the full backup choreography engine (snapshot → sync → copy → merge → archive → checksum), wired end-to-end to `init` (interactive `huh` wizard), `run --vm`, `list`, `status` / `status --vm`, and `cleanup` (orphaned-snapshot removal). Bonus scope beyond the original phase 1 text: the optional TUI layer (checklist/progress UI for `run`, wizard for `init`, card drill-down for `status --vm`) and `vm add`/`vm remove` for editing an existing config without re-running the wizard. Epic #1 closed.
 - [ ] **Phase 2 — Scheduling:** launchd plist generation from each VM's config `schedule` field, `snapback run --all`, and macOS native notifications (osascript) on success/failure — none of this exists yet (`progress.Notifying` is a stage enum nothing fires). Deliberately deferred behind Phase 3 (Restore, below): backups only matter if they can be restored, and that hasn't been proven yet either — running `run` by hand is a tolerable stopgap in the meantime, an unverified restore path isn't.
-- [ ] **Phase 3 — Restore (next up):** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore. Pulled ahead of Phase 2 for the reason above.
+- [x] **Phase 3 — Restore:** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore. Pulled ahead of Phase 2 for the reason above -- shipped in this branch.
 - [ ] **Phase 4 — xbar plugin:** `status --xbar` output, plugin script, click-to-run wiring. Not started — `status.go`'s own help text says so today.
 - [ ] **Phase 5 — Retention:** the `retention` config (`keep_last`/`keep_daily`/`keep_weekly`) is parsed, validated, and displayed in `status --vm`, but nothing enforces it yet — no `prune` command exists.
 - [ ] **Phase 6 (stretch):** SMB/NFS destinations, encrypted VM support if VMware's automation API ever exposes the password flow cleanly.

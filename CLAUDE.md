@@ -29,6 +29,13 @@ of follow-ups filed after its first real-world use (#47–#49, #52–#54),
 including `vm add`/`vm remove <name>` for editing an existing config
 without re-running the whole wizard.
 
+Phase 3 (Restore) has since landed: `snapback restore` resolves an
+archive by ID or by `--vm <name> --latest`, verifies its checksum,
+extracts it, confirms the restored disk chain is consistent, and places
+it as a new, non-destructively-named `.vmwarevm` bundle (never
+overwriting the source) — with `--dest <dir>` to override the inferred
+location.
+
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
 questions), not just a summary.
