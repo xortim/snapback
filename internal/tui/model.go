@@ -1,34 +1,23 @@
-// Package tui renders backup.Run's progress as an interactive bubbletea
-// checklist for a real terminal, per
-// docs/superpowers/specs/2026-08-23-cli-ux-design.md. It depends on
+// Package tui renders a backup or restore pipeline's progress as an
+// interactive bubbletea checklist for a real terminal, per
+// docs/superpowers/specs/2026-08-23-cli-ux-design.md and
+// docs/superpowers/specs/2026-09-11-restore-design.md. It depends on
 // internal/progress (the Event vocabulary) and internal/backup (only for
-// the plain *backup.Result/*backup.RunError data types) -- never the
-// reverse. Choreography code stays free of any rendering import.
+// the plain result/error data types run.go/restore.go's exported entry
+// points return) -- never the reverse. Choreography code stays free of
+// any rendering import.
 package tui
 
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/progress"
 )
-
-// stages is the fixed, display-order subset of progress.Stage values
-// backup.Run actually reports today (Pruning/Notifying exist as Stage
-// constants for future phases but aren't emitted yet, so they're left
-// off this checklist rather than shown permanently pending).
-var stages = []progress.Stage{
-	progress.CheckingTools,
-	progress.Snapshotting,
-	progress.Copying,
-	progress.Merging,
-	progress.Compressing,
-	progress.Checksumming,
-}
 
 type stageStatus int
 
@@ -45,39 +34,42 @@ type stageRow struct {
 	message string
 }
 
-// Model is a bubbletea model rendering one run's progress. Normal callers
-// only interact with it via RunInteractive.
+// Model is a bubbletea model rendering one pipeline run's progress.
+// Normal callers only interact with it via RunInteractive/
+// RestoreInteractive.
 type Model struct {
-	vmName     string
+	header     string
 	cancel     context.CancelFunc
 	rows       []stageRow
+	barStages  []progress.Stage
 	percent    float64
 	showBar    bool
 	start      time.Time
 	elapsed    time.Duration
-	result     *backup.Result
+	result     pipelineResult
 	err        error
 	finished   bool
 	cancelling bool
 }
 
-func newModel(vmName string, cancel context.CancelFunc) Model {
+func newModel(header string, cancel context.CancelFunc, stages, barStages []progress.Stage) Model {
 	rows := make([]stageRow, len(stages))
 	for i, s := range stages {
 		rows[i] = stageRow{stage: s, status: pending}
 	}
 	return Model{
-		vmName: vmName,
-		cancel: cancel,
-		rows:   rows,
-		start:  time.Now(),
+		header:    header,
+		cancel:    cancel,
+		rows:      rows,
+		barStages: barStages,
+		start:     time.Now(),
 	}
 }
 
 type eventMsg progress.Event
 
 type resultMsg struct {
-	result *backup.Result
+	result pipelineResult
 	err    error
 }
 
@@ -122,11 +114,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// applyEvent updates rows in place for a live progress.Event: every
-// stage before e.Stage in the fixed display order is marked done (a
-// stage that already finished, since events arrive in pipeline order),
-// e.Stage itself becomes active, and a Percent-bearing event (the
-// per-file ticks during Copying/Compressing) updates the bar without
+// applyEvent updates rows in place for a live progress.Event: every stage
+// before e.Stage in the fixed display order is marked done, e.Stage itself
+// becomes active, and a Percent-bearing event updates the bar without
 // clearing that stage's last Message.
 func (m *Model) applyEvent(e progress.Event) {
 	idx := -1
@@ -137,8 +127,6 @@ func (m *Model) applyEvent(e progress.Event) {
 		}
 	}
 	if idx == -1 {
-		// Stage not in the displayed checklist (e.g. Done) -- nothing to
-		// update here; resultMsg drives final-state rendering instead.
 		return
 	}
 	for i := 0; i < idx; i++ {
@@ -150,22 +138,16 @@ func (m *Model) applyEvent(e progress.Event) {
 	if e.Message != "" {
 		m.rows[idx].message = e.Message
 	}
-	if e.Stage == progress.Copying || e.Stage == progress.Compressing {
+	if slices.Contains(m.barStages, e.Stage) {
 		m.showBar = true
-		// Only a percent-only tick (no Message) carries a meaningful
-		// Percent -- a message-bearing event's Percent is just the unset
-		// zero value, and applying it here would visibly snap the bar back
-		// to 0% if a message-bearing event ever arrives mid-stage.
 		if e.Message == "" {
 			m.percent = e.Percent
 		}
 	}
 }
 
-// applyFinalStatus marks every row done (success) or the row matching
-// the failing RunError's Stage as failed (leaving earlier rows done, so
-// the failure is legible in context per the spec), called once when
-// resultMsg arrives.
+// applyFinalStatus marks every row done (success) or the row matching the
+// failing error's Stage as failed, called once when resultMsg arrives.
 func (m *Model) applyFinalStatus() {
 	if m.err == nil {
 		for i := range m.rows {
@@ -173,12 +155,13 @@ func (m *Model) applyFinalStatus() {
 		}
 		return
 	}
-	var runErr *backup.RunError
-	if errors.As(m.err, &runErr) {
+	var perr pipelineError
+	if errors.As(m.err, &perr) {
+		stage := perr.FailedStage()
 		for i := range m.rows {
-			if m.rows[i].stage == runErr.Stage {
+			if m.rows[i].stage == stage {
 				m.rows[i].status = failed
-				m.rows[i].message = runErr.Err.Error()
+				m.rows[i].message = perr.Error()
 				return
 			}
 		}
