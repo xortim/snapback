@@ -22,10 +22,21 @@ destination/retention, writes config.yaml), and `vm add`/`vm remove
 `cleanup` finds and removes any `snapback-<timestamp>` snapshot orphaned
 by a `run` that died mid-choreography, and is serialized against `run`
 via a per-VM lock so the two can never touch the same VM's snapshots at
-once. Current work is the optional TUI layer's remaining polish. See
-[`docs/design.md`](docs/design.md) for the full ADR — architecture,
-choreography, config schema, risks, and the open questions still worth
-verifying locally.
+once. The optional TUI layer (progress UI for `run`/`restore`, wizard
+for `init`, card drill-down for `status --vm`) is also fully built out.
+
+Phase 3 (Restore) has since landed, pulled ahead of Phase 2 on the
+reasoning that an unverified restore path is a bigger risk than manual
+`run` invocations in the meantime: `snapback restore` resolves an
+archive by ID or by `--vm <name> --latest`, verifies its checksum,
+extracts it, confirms the restored disk chain is consistent, and places
+it as a new, non-destructively-named `.vmwarevm` bundle next to the
+source (`--dest <dir>` to override the inferred location). Current work
+is Phase 2 — `launchd` scheduling, `run --all`, and success/failure
+notifications. See [`docs/design.md`](docs/design.md) for the full ADR
+— architecture, choreography, config schema, risks, and the open
+questions still worth verifying locally, plus its own Roadmap section
+for the phase-by-phase detail this summary skips.
 
 ## Why this exists
 
@@ -55,12 +66,16 @@ sudo mv snapback /usr/local/bin/
 ## Quick start
 
 ```sh
-snapback init        # scans ~/Virtual Machines and ~/Virtual Machines.localized for .vmwarevm bundles (falls back to manual entry), prompts for destination + retention
-snapback run --all   # on-demand backup of every configured VM
-snapback status       # last run, next scheduled run, disk usage
+snapback init                       # scans ~/Virtual Machines and ~/Virtual Machines.localized for .vmwarevm bundles (falls back to manual entry), prompts for destination + retention
+snapback run --vm dev-ubuntu        # on-demand backup of one configured VM (--all isn't implemented yet, see Roadmap)
+snapback list                       # backup archives, with timestamp and size
+snapback status                     # one row per configured VM: last backup, size, archive count
+snapback restore --vm dev-ubuntu --latest   # restore the newest archive as a new .vmwarevm, never overwriting the source
 ```
 
-Full command reference is in [`docs/design.md`](docs/design.md#command-reference).
+Full command reference — every subcommand and flag — is in
+[`docs/design.md`](docs/design.md#command-reference); `snapback [command]
+--help` covers the same ground from the terminal.
 
 ## Config
 
@@ -110,11 +125,11 @@ SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, need
 
 ## Roadmap
 
-- [x] Phase 1 — Core CLI (`init`, `run`, `list`, `status`), single VM at a time
-- [ ] Phase 2 — `launchd` scheduling, orphaned-snapshot cleanup
-- [ ] Phase 3 — Restore workflow, manifest-driven integrity check
+- [x] Phase 1 — Core CLI (`init`, `run --vm`, `list`, `status`, `cleanup`, `vm add`/`vm remove`) plus the optional TUI layer, single VM at a time
+- [ ] Phase 2 — `launchd` scheduling, `run --all`, success/failure notifications
+- [x] Phase 3 — Restore workflow, manifest-driven integrity check (pulled ahead of Phase 2 — see Status above)
 - [ ] Phase 4 — xbar plugin
-- [ ] Phase 5 — Retention/pruning policy engine
+- [ ] Phase 5 — Retention/pruning policy engine (`prune` command; config already parses `keep_last`/`keep_daily`/`keep_weekly`)
 - [ ] Phase 6 (stretch) — SMB/NFS destinations
 
 ## Scope
