@@ -2,11 +2,8 @@ package backup
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"hash"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +17,7 @@ import (
 // RestoreOptions configures a single restore.
 type RestoreOptions struct {
 	ArchiveID   string
+	Archive     *Archive         // if set, used directly instead of resolving ArchiveID via FindArchive -- lets a caller that already resolved the archive (e.g. internal/cli, which needs it up front to infer --dest) pass it straight through instead of triggering a second archive-directory scan, which also closes the window where a second, independent resolution could observe a different (or since-deleted) archive than the first. ArchiveID is ignored when this is set.
 	Destination string           // parent directory archives live under (cfg.Destination)
 	TargetDir   string           // parent directory to place the restored bundle in; mutually exclusive with VMXPath
 	VMXPath     string           // source VM's vmx path, if known; mutually exclusive with TargetDir
@@ -39,24 +37,6 @@ func (r *RestoreResult) Summary() string {
 	return fmt.Sprintf("restore complete: %s", r.TargetPath)
 }
 
-// RestoreError mirrors RunError: which stage was active when the restore
-// failed.
-type RestoreError struct {
-	Stage progress.Stage
-	Err   error
-}
-
-func (e *RestoreError) Error() string               { return e.Err.Error() }
-func (e *RestoreError) Unwrap() error               { return e.Err }
-func (e *RestoreError) FailedStage() progress.Stage { return e.Stage }
-
-func checkRestoreCtx(ctx context.Context, stage progress.Stage) *RestoreError {
-	if err := ctx.Err(); err != nil {
-		return &RestoreError{Stage: stage, Err: err}
-	}
-	return nil
-}
-
 // Restore verifies a backup archive against its manifest checksum,
 // extracts it, confirms the restored disk chain is consistent, and places
 // it as a new, non-destructively-named .vmwarevm bundle -- never
@@ -64,35 +44,49 @@ func checkRestoreCtx(ctx context.Context, stage progress.Stage) *RestoreError {
 // (docs/superpowers/specs/2026-09-11-restore-design.md) for the full
 // design. Restore never touches the source VM -- ctrl is used only for
 // CheckDiskConsistency against the restored copy.
+//
+// Errors are returned as *RunError (shared with Run -- both pipelines tag
+// failures with the same progress.Stage vocabulary, so one error type
+// suffices for both, see checkCtx's doc comment).
 func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, opts RestoreOptions) (*RestoreResult, error) {
 	if reporter == nil {
 		reporter = progress.NoOpReporter{}
 	}
 
 	if opts.TargetDir == "" && opts.VMXPath == "" {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("one of TargetDir or VMXPath is required")}
+		return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("one of TargetDir or VMXPath is required")}
 	}
 	if opts.TargetDir != "" && opts.VMXPath != "" {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("TargetDir and VMXPath are mutually exclusive")}
+		return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("TargetDir and VMXPath are mutually exclusive")}
 	}
 
 	targetParent := opts.TargetDir
 	if targetParent == "" {
-		targetParent = filepath.Dir(filepath.Dir(opts.VMXPath))
+		vmxDir := filepath.Dir(opts.VMXPath)
+		if filepath.Ext(vmxDir) != ".vmwarevm" {
+			return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("VMX path %q is not inside a .vmwarevm bundle directory -- pass --dest to restore without relying on the configured VM's layout", opts.VMXPath)}
+		}
+		targetParent = filepath.Dir(vmxDir)
 	}
 	if info, statErr := os.Stat(targetParent); statErr != nil {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent directory %s: %w", targetParent, statErr)}
+		return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent directory %s: %w", targetParent, statErr)}
 	} else if !info.IsDir() {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent %s is not a directory", targetParent)}
+		return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent %s is not a directory", targetParent)}
 	}
 
-	if runErr := checkRestoreCtx(ctx, progress.Verifying); runErr != nil {
+	if runErr := checkCtx(ctx, progress.Verifying); runErr != nil {
 		return nil, runErr
 	}
 
-	archive, err := FindArchive(opts.Destination, opts.ArchiveID)
-	if err != nil {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: err}
+	var archive Archive
+	if opts.Archive != nil {
+		archive = *opts.Archive
+	} else {
+		a, err := FindArchive(opts.Destination, opts.ArchiveID)
+		if err != nil {
+			return nil, &RunError{Stage: progress.Verifying, Err: err}
+		}
+		archive = a
 	}
 
 	ext := "tar.gz"
@@ -102,11 +96,15 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	archivePath := filepath.Join(opts.Destination, archive.ArchiveID, "archive."+ext)
 
 	reporter.Report(progress.Event{Stage: progress.Verifying, Message: "verifying archive checksum"})
-	if err := verifyChecksum(archivePath, archive.Manifest.SHA256, throttledPercentReporter(reporter, progress.Verifying, archive.Manifest.SizeBytes)); err != nil {
-		return nil, &RestoreError{Stage: progress.Verifying, Err: err}
+	got, err := hashFile(archivePath, throttledPercentReporter(reporter, progress.Verifying, archive.Manifest.SizeBytes))
+	if err != nil {
+		return nil, &RunError{Stage: progress.Verifying, Err: err}
+	}
+	if got != archive.Manifest.SHA256 {
+		return nil, &RunError{Stage: progress.Verifying, Err: fmt.Errorf("checksum mismatch for %s: got %s, want %s", archivePath, got, archive.Manifest.SHA256)}
 	}
 
-	if runErr := checkRestoreCtx(ctx, progress.Extracting); runErr != nil {
+	if runErr := checkCtx(ctx, progress.Extracting); runErr != nil {
 		return nil, runErr
 	}
 
@@ -114,17 +112,21 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	if stagingParent == "" {
 		stagingParent = os.TempDir()
 	}
-	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+opts.ArchiveID)
+	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+archive.ArchiveID)
 
-	reporter.Report(progress.Event{Stage: progress.Extracting, Message: "extracting archive"})
-	// archive.Manifest.SizeBytes is the compressed size, an approximation
-	// for extraction's (uncompressed) total -- same clamped-at-1 tolerance
-	// percentOf already documents for Run's own Compressing stage.
-	onWrite := throttledPercentReporter(reporter, progress.Extracting, archive.Manifest.SizeBytes)
-	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, onWrite); err != nil {
-		return nil, &RestoreError{Stage: progress.Extracting, Err: err}
-	}
-
+	// keepStaging starts false so a failed extraction (nothing worth
+	// inspecting yet) is cleaned up automatically, letting a retry of the
+	// same archive ID reuse this same directory name instead of tripping
+	// extractArchive's "already exists" guard forever. It flips to true the
+	// moment extraction succeeds and stays true for every return from here
+	// on -- a real extracted copy is worth preserving for inspection on any
+	// later failure (disk-consistency, placement, or cancellation) -- and
+	// is only reset to false right before the final, fully-successful
+	// return. This mirrors Run's keepStaging/succeeded pattern
+	// (choreography.go) but as a single flip instead of one manual
+	// keepStaging = true per failure branch, which is what let two of those
+	// branches (the ctx-cancellation checks below) forget it in the first
+	// place.
 	keepStaging := false
 	defer func() {
 		if !keepStaging {
@@ -132,36 +134,41 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 		}
 	}()
 
+	reporter.Report(progress.Event{Stage: progress.Extracting, Message: "extracting archive"})
+	// archive.Manifest.SizeBytes is the compressed size, an approximation
+	// for extraction's (uncompressed) total -- same clamped-at-1 tolerance
+	// percentOf already documents for Run's own Compressing stage.
+	onWrite := throttledPercentReporter(reporter, progress.Extracting, archive.Manifest.SizeBytes)
+	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, onWrite); err != nil {
+		return nil, &RunError{Stage: progress.Extracting, Err: err}
+	}
+	keepStaging = true
+
 	bundleBase, bundleDir, err := singleTopLevelEntry(stagingDir)
 	if err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.Extracting, Err: err}
+		return nil, &RunError{Stage: progress.Extracting, Err: err}
 	}
 
-	if runErr := checkRestoreCtx(ctx, progress.CheckingDiskConsistency); runErr != nil {
+	if runErr := checkCtx(ctx, progress.CheckingDiskConsistency); runErr != nil {
 		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.CheckingDiskConsistency, Message: "checking restored disk consistency"})
 	vmxPath, err := findVMX(bundleDir)
 	if err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: err}
+		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: err}
 	}
 	diskFiles, err := readDiskFiles(vmxPath)
 	if err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: err}
+		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: err}
 	}
 	if len(diskFiles) == 0 {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("no virtual disks found in restored %s -- cannot verify the archive's disk chain; the extracted copy at %s has been preserved for inspection", vmxPath, stagingDir)}
+		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("no virtual disks found in restored %s -- cannot verify the archive's disk chain; the extracted copy at %s has been preserved for inspection", vmxPath, stagingDir)}
 	}
 	if err := checkDisksConsistent(ctrl, bundleDir, diskFiles); err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("restored disk consistency check failed -- the archive itself may be damaged; the extracted copy at %s has been preserved for inspection: %w", stagingDir, err)}
+		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("restored disk consistency check failed -- the archive itself may be damaged; the extracted copy at %s has been preserved for inspection: %w", stagingDir, err)}
 	}
 
-	if runErr := checkRestoreCtx(ctx, progress.Placing); runErr != nil {
+	if runErr := checkCtx(ctx, progress.Placing); runErr != nil {
 		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Placing, Message: "placing restored bundle"})
@@ -172,58 +179,17 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	}
 	targetName, err := restoreTargetName(targetParent, bundleBase, now())
 	if err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.Placing, Err: err}
+		return nil, &RunError{Stage: progress.Placing, Err: err}
 	}
 	targetPath := filepath.Join(targetParent, targetName)
 
 	if err := placeBundle(bundleDir, targetPath); err != nil {
-		keepStaging = true
-		return nil, &RestoreError{Stage: progress.Placing, Err: err}
+		return nil, &RunError{Stage: progress.Placing, Err: err}
 	}
 
+	keepStaging = false
 	reporter.Report(progress.Event{Stage: progress.Done, Message: "restore complete"})
 	return &RestoreResult{ArchiveID: archive.ArchiveID, TargetPath: targetPath, Manifest: archive.Manifest}, nil
-}
-
-// countingHasher wraps a hash.Hash, invoking onWrite with the running
-// cumulative byte count as it's written to -- lets verifyChecksum drive
-// Verifying's Percent the same per-chunk way tarTo/copyDir do for their
-// own stages.
-type countingHasher struct {
-	h          hash.Hash
-	onWrite    func(cumulative int64)
-	cumulative int64
-}
-
-func (c *countingHasher) Write(p []byte) (int, error) {
-	n, err := c.h.Write(p)
-	c.cumulative += int64(n)
-	if c.onWrite != nil {
-		c.onWrite(c.cumulative)
-	}
-	return n, err
-}
-
-// verifyChecksum streams path through SHA-256, comparing the result
-// against want (lowercase hex). If onRead is non-nil, it's invoked with
-// the running cumulative bytes read.
-func verifyChecksum(path, want string, onRead func(cumulative int64)) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
-	ch := &countingHasher{h: sha256.New(), onWrite: onRead}
-	if _, err := io.Copy(ch, f); err != nil {
-		return fmt.Errorf("read %s: %w", path, err)
-	}
-	got := fmt.Sprintf("%x", ch.h.Sum(nil))
-	if got != want {
-		return fmt.Errorf("checksum mismatch for %s: got %s, want %s", path, got, want)
-	}
-	return nil
 }
 
 // singleTopLevelEntry returns the base name (with ".vmwarevm" stripped)

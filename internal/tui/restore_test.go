@@ -40,7 +40,7 @@ func TestRestoreInteractive_Success_ReturnsResult(t *testing.T) {
 
 func TestRestoreInteractive_Failure_ReturnsError(t *testing.T) {
 	var out bytes.Buffer
-	wantErr := &backup.RestoreError{Stage: progress.CheckingDiskConsistency, Err: errors.New("disk check failed")}
+	wantErr := &backup.RunError{Stage: progress.CheckingDiskConsistency, Err: errors.New("disk check failed")}
 
 	restoreFn := func(r progress.Reporter) (*backup.RestoreResult, error) {
 		r.Report(progress.Event{Stage: progress.CheckingDiskConsistency, Message: "checking restored disk consistency"})

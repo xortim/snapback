@@ -10,8 +10,9 @@ type pipelineResult interface {
 	Summary() string
 }
 
-// pipelineError is implemented by *backup.RunError and *backup.RestoreError
-// -- both carry the progress.Stage active when their pipeline failed.
+// pipelineError is implemented by *backup.RunError -- shared by both Run
+// and Restore's failures, each carrying the progress.Stage active when
+// their pipeline failed.
 type pipelineError interface {
 	error
 	FailedStage() progress.Stage

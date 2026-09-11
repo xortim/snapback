@@ -103,19 +103,32 @@ func restoreArchive(cmd *cobra.Command, deps restoreDeps, archiveID, vmName stri
 		return fmt.Errorf("connect to VM controller: %w", err)
 	}
 
-	resolvedArchiveID := archiveID
+	// Resolved exactly once, here, and threaded through via opts.Archive --
+	// backup.Restore then uses it directly instead of re-resolving
+	// archiveID itself. Besides avoiding a second archive-directory scan,
+	// this closes a TOCTOU window: with two independent resolutions (one
+	// here, one inside Restore), an archive removed by an unattended prune
+	// in between could resolve here but vanish before Restore's own
+	// lookup, failing partway into what looked like a normal restore.
 	label := archiveID
+	var archive backup.Archive
 	if vmName != "" && latest {
-		archive, err := backup.LatestArchiveForVM(cfg.Destination, vmName)
+		var err error
+		archive, err = backup.LatestArchiveForVM(cfg.Destination, vmName)
 		if err != nil {
 			return fmt.Errorf("resolve latest archive for %q: %w", vmName, err)
 		}
-		resolvedArchiveID = archive.ArchiveID
 		label = vmName
+	} else {
+		var err error
+		archive, err = backup.FindArchive(cfg.Destination, archiveID)
+		if err != nil {
+			return fmt.Errorf("resolve archive %q: %w", archiveID, err)
+		}
 	}
 
 	opts := backup.RestoreOptions{
-		ArchiveID:   resolvedArchiveID,
+		Archive:     &archive,
 		Destination: cfg.Destination,
 	}
 
@@ -124,10 +137,6 @@ func restoreArchive(cmd *cobra.Command, deps restoreDeps, archiveID, vmName stri
 	} else {
 		lookupName := vmName
 		if lookupName == "" {
-			archive, err := backup.FindArchive(cfg.Destination, resolvedArchiveID)
-			if err != nil {
-				return fmt.Errorf("resolve archive %q: %w", resolvedArchiveID, err)
-			}
 			lookupName = archive.Manifest.VMName
 		}
 		vmCfg, ok := findVMConfig(cfg.VMs, lookupName)

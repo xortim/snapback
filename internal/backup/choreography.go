@@ -99,9 +99,10 @@ func CheckVMDiskConsistency(ctrl vm.Controller, vmxPath string) error {
 }
 
 // checkCtx returns a *RunError tagged with stage if ctx is done, or nil
-// otherwise. Centralizes the ctx.Err() check Run performs at each stage
-// boundary so the only thing that varies per call site is which Stage to
-// tag -- see the design doc's discussion of this exact copy-paste risk.
+// otherwise. Centralizes the ctx.Err() check Run and Restore (restore.go)
+// each perform at their own stage boundaries so the only thing that varies
+// per call site is which Stage to tag -- see the design doc's discussion
+// of this exact copy-paste risk.
 func checkCtx(ctx context.Context, stage progress.Stage) *RunError {
 	if err := ctx.Err(); err != nil {
 		return &RunError{Stage: stage, Err: err}

@@ -165,6 +165,32 @@ func TestRestore_VMXPathSuccessPath_PlacesBesideSourceVM(t *testing.T) {
 	}
 }
 
+// TestRestore_VMXPathNotInBundle_ReturnsClearError exercises the opts.VMXPath
+// branch when the configured vmx path isn't nested directly inside a
+// ".vmwarevm" bundle directory -- config.Load only validates VMX is
+// non-empty, so a hand-edited or legacy config entry like "/vms/dev2.vmx"
+// must be rejected with a clear error instead of silently deriving
+// targetParent as "/" via filepath.Dir(filepath.Dir(vmxPath)).
+func TestRestore_VMXPathNotInBundle_ReturnsClearError(t *testing.T) {
+	destination := t.TempDir()
+	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "gzip")
+	vmxPath := filepath.Join(t.TempDir(), "flatdir", "dev2.vmx")
+
+	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, VMXPath: vmxPath}
+	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+
+	var restoreErr *RunError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
+	}
+	if restoreErr.Stage != progress.Verifying {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
+	}
+	if !strings.Contains(restoreErr.Error(), ".vmwarevm") {
+		t.Errorf("Error() = %q, want it to mention .vmwarevm", restoreErr.Error())
+	}
+}
+
 func TestRestore_ChecksumMismatch_FailsBeforeExtracting(t *testing.T) {
 	destination := t.TempDir()
 	archiveID, m := buildFixtureArchive(t, destination, "myvm", "gzip")
@@ -177,9 +203,9 @@ func TestRestore_ChecksumMismatch_FailsBeforeExtracting(t *testing.T) {
 	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
 	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
 
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.Verifying {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
@@ -187,6 +213,101 @@ func TestRestore_ChecksumMismatch_FailsBeforeExtracting(t *testing.T) {
 	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+archiveID)
 	if _, statErr := os.Stat(stagingDir); !os.IsNotExist(statErr) {
 		t.Errorf("staging dir %s exists, want it never created on a checksum failure", stagingDir)
+	}
+}
+
+// TestRestore_ExtractionFailure_CleansUpStagingDir corrupts the archive
+// file's bytes in place after the fixture is built, then rewrites the
+// manifest's checksum to match the corrupted bytes -- so verifyChecksum
+// (now hashFile) passes (it hashes whatever is actually on disk) but
+// extractArchive fails immediately, since the corrupted bytes aren't
+// valid gzip. Before the fix, the staging dir extractArchive creates
+// (MkdirAll happens before the gzip header is read) leaked forever on this
+// path, since the cleanup defer was registered after the failing call --
+// permanently blocking any retry of the same archive ID with
+// extractArchive's "already exists" error.
+func TestRestore_ExtractionFailure_CleansUpStagingDir(t *testing.T) {
+	destination := t.TempDir()
+	archiveID, m := buildFixtureArchive(t, destination, "myvm", "gzip")
+
+	archivePath := filepath.Join(destination, archiveID, "archive.tar.gz")
+	garbage := []byte("not a valid gzip stream")
+	if err := os.WriteFile(archivePath, garbage, 0o644); err != nil {
+		t.Fatalf("corrupt archive: %v", err)
+	}
+	sum, err := sha256File(archivePath)
+	if err != nil {
+		t.Fatalf("sha256File: %v", err)
+	}
+	m.SHA256 = sum
+	if err := writeManifest(filepath.Join(destination, archiveID, "manifest.json"), m); err != nil {
+		t.Fatalf("rewrite manifest: %v", err)
+	}
+
+	stagingParent := t.TempDir()
+	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
+	_, err = Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+
+	var restoreErr *RunError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
+	}
+	if restoreErr.Stage != progress.Extracting {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Extracting)
+	}
+	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+archiveID)
+	if _, statErr := os.Stat(stagingDir); !os.IsNotExist(statErr) {
+		t.Errorf("staging dir %s exists, want it cleaned up on extraction failure so a retry doesn't hit \"already exists\"", stagingDir)
+	}
+}
+
+// restoreCancelingController wraps vm.FakeVMController and cancels ctx as
+// a side effect of a successful CheckDiskConsistency call -- mirrors
+// choreography_test.go's cancelingController, but for Restore's one ctrl
+// call, deterministically landing cancellation in the window between
+// CheckingDiskConsistency succeeding and the Placing-stage checkCtx check.
+type restoreCancelingController struct {
+	*vm.FakeVMController
+	cancel context.CancelFunc
+}
+
+func (c *restoreCancelingController) CheckDiskConsistency(diskPath string) error {
+	err := c.FakeVMController.CheckDiskConsistency(diskPath)
+	c.cancel()
+	return err
+}
+
+// TestRestore_ContextCanceledAfterDiskCheck_PreservesStagingDir exercises
+// the Placing-stage checkCtx call: ctx is canceled only after extraction
+// and disk-consistency verification have both already succeeded, so the
+// extracted copy is real, verified work -- it must be preserved for
+// inspection like every other post-extraction failure, not silently
+// discarded by the deferred cleanup just because the failure happened to
+// be a cancellation instead of a returned error.
+func TestRestore_ContextCanceledAfterDiskCheck_PreservesStagingDir(t *testing.T) {
+	destination := t.TempDir()
+	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "gzip")
+	stagingParent := t.TempDir()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	ctrl := &restoreCancelingController{FakeVMController: vm.NewFakeVMController(), cancel: cancel}
+
+	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
+	_, err := Restore(ctx, ctrl, progress.NoOpReporter{}, opts)
+
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Restore() error = %v, want it to wrap context.Canceled", err)
+	}
+	var restoreErr *RunError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
+	}
+	if restoreErr.Stage != progress.Placing {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Placing)
+	}
+	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+archiveID)
+	if _, statErr := os.Stat(stagingDir); statErr != nil {
+		t.Errorf("staging dir %s missing, want it preserved for inspection after a post-extraction cancellation: %v", stagingDir, statErr)
 	}
 }
 
@@ -200,9 +321,9 @@ func TestRestore_DiskConsistencyFailure_PreservesStagingDir(t *testing.T) {
 	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
 	_, err := Restore(context.Background(), ctrl, progress.NoOpReporter{}, opts)
 
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.CheckingDiskConsistency {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.CheckingDiskConsistency)
@@ -222,9 +343,9 @@ func TestRestore_NoDisksFound_FailsAndPreservesStagingDir(t *testing.T) {
 	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
 	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
 
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.CheckingDiskConsistency {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.CheckingDiskConsistency)
@@ -245,9 +366,9 @@ func TestRestore_TargetParentDoesNotExist_FailsBeforeArchiveLookup(t *testing.T)
 	opts := RestoreOptions{ArchiveID: "does-not-exist-either", Destination: destination, TargetDir: missingParent}
 	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
 
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.Verifying {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
@@ -296,9 +417,9 @@ func TestRestore_UnresolvableArchiveID_ReturnsErrorBeforeIO(t *testing.T) {
 func TestRestore_MissingTargetDirAndVMXPath_ReturnsValidationError(t *testing.T) {
 	opts := RestoreOptions{ArchiveID: "whatever", Destination: t.TempDir()}
 	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.Verifying {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
@@ -308,9 +429,9 @@ func TestRestore_MissingTargetDirAndVMXPath_ReturnsValidationError(t *testing.T)
 func TestRestore_BothTargetDirAndVMXPath_ReturnsValidationError(t *testing.T) {
 	opts := RestoreOptions{ArchiveID: "whatever", Destination: t.TempDir(), TargetDir: "/a", VMXPath: "/b/myvm.vmx"}
 	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
-	var restoreErr *RestoreError
+	var restoreErr *RunError
 	if !errors.As(err, &restoreErr) {
-		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
 	}
 	if restoreErr.Stage != progress.Verifying {
 		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
@@ -410,8 +531,8 @@ func TestPlaceBundle_CrossDeviceCopyFails_RemovesPartialTarget(t *testing.T) {
 	}
 }
 
-func TestRestoreError_FailedStage(t *testing.T) {
-	err := &RestoreError{Stage: progress.Extracting, Err: errRestoreBoom}
+func TestRestore_ErrorIsRunError_FailedStage(t *testing.T) {
+	err := &RunError{Stage: progress.Extracting, Err: errRestoreBoom}
 	if got := err.FailedStage(); got != progress.Extracting {
 		t.Errorf("FailedStage() = %v, want %v", got, progress.Extracting)
 	}
