@@ -71,6 +71,10 @@ func untarFromZstd(in io.Reader, destDir string, onWrite func(cumulativeBytes in
 	}
 
 	untarErr := untarFrom(stdout, destDir, onWrite)
+	// Drain any remaining stdout to unblock zstd if untarFrom exited early
+	// (corrupt tar, path-traversal rejection) before fully reading its output.
+	// This prevents a deadlock where zstd blocks on a full pipe buffer.
+	_, _ = io.Copy(io.Discard, stdout)
 	waitErr := cmd.Wait()
 
 	if waitErr != nil {
@@ -111,6 +115,16 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 				return fmt.Errorf("mkdir %s: %w", target, err)
 			}
 		case tar.TypeSymlink:
+			// Validate that symlink target doesn't escape destDir.
+			// Reject absolute paths outright; for relative paths, resolve
+			// against the symlink's directory and check it stays within destDir.
+			if filepath.IsAbs(hdr.Linkname) {
+				return fmt.Errorf("symlink %q has absolute target %q (escapes destination directory)", hdr.Name, hdr.Linkname)
+			}
+			resolvedTarget := filepath.Join(filepath.Dir(target), hdr.Linkname)
+			if !isWithinDir(destDir, resolvedTarget) {
+				return fmt.Errorf("symlink %q with target %q escapes destination directory", hdr.Name, hdr.Linkname)
+			}
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
 			}

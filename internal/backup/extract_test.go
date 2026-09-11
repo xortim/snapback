@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestExtractArchive_GzipRoundTrip(t *testing.T) {
@@ -142,4 +143,120 @@ func TestExtractArchive_PathTraversalEntry_IsRejected(t *testing.T) {
 		t.Errorf("escape.txt exists outside destDir, want it never written")
 	}
 	_ = bytes.NewReader // keep bytes imported for future assertions in this file
+}
+
+func TestExtractArchive_SymlinkAbsoluteTarget_IsRejected(t *testing.T) {
+	// Hand-craft a tar.gz with a symlink whose target is absolute (e.g. /etc/passwd).
+	// extractArchive must reject this rather than create it.
+	archivePath := filepath.Join(t.TempDir(), "malicious.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "link.txt", Linkname: "/etc/passwd", Mode: 0o644, Typeflag: tar.TypeSymlink}); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destParent := t.TempDir()
+	destDir := filepath.Join(destParent, "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err == nil {
+		t.Fatal("extractArchive() error = nil, want rejection of absolute symlink target")
+	}
+	if _, err := os.Stat(filepath.Join(destDir, "link.txt")); !os.IsNotExist(err) {
+		t.Errorf("link.txt was created, want it never written")
+	}
+}
+
+func TestExtractArchive_SymlinkRelativeEscapeTarget_IsRejected(t *testing.T) {
+	// Hand-craft a tar.gz with a symlink whose relative target uses ../ to escape.
+	// extractArchive must reject this rather than create it.
+	archivePath := filepath.Join(t.TempDir(), "malicious.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	if err := tw.WriteHeader(&tar.Header{Name: "subdir/link.txt", Linkname: "../../escape.txt", Mode: 0o644, Typeflag: tar.TypeSymlink}); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destParent := t.TempDir()
+	destDir := filepath.Join(destParent, "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err == nil {
+		t.Fatal("extractArchive() error = nil, want rejection of relative-escape symlink target")
+	}
+	if _, err := os.Stat(filepath.Join(destParent, "escape.txt")); !os.IsNotExist(err) {
+		t.Errorf("escape.txt exists outside destDir, want it never written")
+	}
+}
+
+func TestExtractArchive_ZstdCorruptedArchive_NoDeadlock(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed, skipping")
+	}
+
+	// Create a zstd-compressed archive with several MB of content, then corrupt
+	// a byte partway through to trigger a truncated/garbled tar body. Extract
+	// should return within a timeout, not deadlock.
+	srcDir := t.TempDir()
+	// Write 5MB of data to exceed typical pipe buffer (~64KB).
+	if err := os.WriteFile(filepath.Join(srcDir, "large.bin"), make([]byte, 5*1024*1024), 0o644); err != nil {
+		t.Fatalf("write large file: %v", err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "archive.tar.zst")
+	if _, err := createArchive(srcDir, archivePath, "zstd", nil); err != nil {
+		t.Fatalf("createArchive: %v", err)
+	}
+
+	// Corrupt a byte partway through the compressed file.
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatalf("read archive: %v", err)
+	}
+	if len(data) > 0 {
+		// Flip a bit at ~30% into the file to corrupt the compressed stream.
+		corruptIdx := len(data) / 3
+		data[corruptIdx] ^= 0xFF
+	}
+	if err := os.WriteFile(archivePath, data, 0o644); err != nil {
+		t.Fatalf("write corrupted archive: %v", err)
+	}
+
+	// Extract in a goroutine with a timeout to detect deadlock.
+	destDir := filepath.Join(t.TempDir(), "extracted")
+	done := make(chan error, 1)
+	go func() {
+		done <- extractArchive(archivePath, destDir, "zstd", nil)
+	}()
+
+	select {
+	case err := <-done:
+		// Expected to get an error from the corrupted archive.
+		if err == nil {
+			t.Error("extractArchive() error = nil, want an error for corrupted zstd archive")
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("extractArchive() deadlocked on corrupted zstd archive (>10s timeout)")
+	}
 }
