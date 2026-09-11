@@ -18,7 +18,7 @@
 - No new locking for `Restore` (out of scope per ADR-004 — `Restore` never touches the source VM, only the archive and the restore target).
 - `restore` never registers the restored bundle with Fusion (`vmrun register` or equivalent) — it places a normal `.vmwarevm` on disk and stops.
 - `RunInteractive`'s existing exported signature is unchanged; it becomes a thin wrapper over generalized internals.
-- `restoreTargetName`'s collision loop is capped at 100 attempts (`N = 2..101`) before erroring.
+- `restoreTargetName`'s collision loop is capped at 100 total attempts (the plain name plus `N = 2..100`) before erroring.
 
 ---
 
@@ -736,7 +736,7 @@ func restoreTargetName(parent, bundleBase string, now time.Time) (string, error)
 		return base, nil
 	}
 	stem := fmt.Sprintf("%s - backup %s", bundleBase, date)
-	for n := 2; n <= 101; n++ {
+	for n := 2; n <= 100; n++ {
 		candidate := fmt.Sprintf("%s (%d).vmwarevm", stem, n)
 		if !pathExists(filepath.Join(parent, candidate)) {
 			return candidate, nil
@@ -1745,7 +1745,7 @@ import (
 // rendered to out, so callers must not treat this the same as an error
 // the TUI already displayed (see internal/cli/run.go's use of errors.Is
 // here).
-var ErrInteractiveRunIncomplete = errors.New("interactive run ended before the pipeline finished")
+var ErrInteractiveRunIncomplete = errors.New("interactive run ended before the backup finished")
 
 // runStages is the fixed, display-order subset of progress.Stage values
 // backup.Run actually reports today (Pruning/Notifying exist as Stage
