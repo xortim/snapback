@@ -269,7 +269,7 @@ func TestRun_ContextCanceledAfterCheckToolsState_StageBelowSnapshotting(t *testi
 }
 
 func TestRun_NonRunningToolsState_RecordsCrashConsistent(t *testing.T) {
-	vmxPath := writeMinimalVMX(t)
+	vmxPath := writeMinimalVMXWithDisk(t)
 	fake := vm.NewFakeVMController()
 	fake.ToolsState = vm.ToolsNotInstalled
 

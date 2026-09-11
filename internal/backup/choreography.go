@@ -71,6 +71,9 @@ func (r *Result) Summary() string {
 // immediately before/after its own snapshot/merge calls; status: once
 // per VM per invocation).
 func checkDisksConsistent(ctrl vm.Controller, bundleDir string, diskFiles []string) error {
+	if len(diskFiles) == 0 {
+		return fmt.Errorf("no virtual disks found in %s -- cannot verify disk chain consistency", bundleDir)
+	}
 	var errs []error
 	for _, diskFile := range diskFiles {
 		diskPath := diskFile
@@ -378,11 +381,7 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	if err != nil {
 		return nil, &RunError{Stage: progress.Compressing, Err: fmt.Errorf("create archive: %w", err)}
 	}
-	ext := "tar.gz"
-	if usedCompression == "zstd" {
-		ext = "tar.zst"
-	}
-	archivePath := filepath.Join(outputDir, "archive."+ext)
+	archivePath := filepath.Join(outputDir, "archive."+archiveExt(usedCompression))
 	if err := os.Rename(tempArchivePath, archivePath); err != nil {
 		return nil, &RunError{Stage: progress.Compressing, Err: fmt.Errorf("rename archive: %w", err)}
 	}

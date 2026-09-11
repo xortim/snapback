@@ -27,6 +27,6 @@ func (e *RunError) Error() string { return e.Err.Error() }
 func (e *RunError) Unwrap() error { return e.Err }
 
 // FailedStage implements the pipelineError interface internal/tui's
-// generalized Model matches failures against -- see RestoreError, which
-// carries the same method for backup.Restore's failures.
+// generalized Model matches failures against -- also satisfied by
+// Restore's own errors, since both pipelines return *RunError.
 func (e *RunError) FailedStage() progress.Stage { return e.Stage }

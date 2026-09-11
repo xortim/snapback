@@ -359,6 +359,31 @@ func TestRestore_NoDisksFound_FailsAndPreservesStagingDir(t *testing.T) {
 	}
 }
 
+func TestRestore_AbsoluteDiskPath_FailsInsteadOfCheckingWrongFile(t *testing.T) {
+	destination := t.TempDir()
+	vmxContent := "guestOS = \"ubuntu-64\"\nscsi0:0.fileName = \"/Volumes/external/myvm.vmdk\"\n"
+	archiveID, _ := buildFixtureArchiveVMX(t, destination, "myvm", "gzip", vmxContent, false)
+	stagingParent := t.TempDir()
+
+	fake := vm.NewFakeVMController()
+	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
+	_, err := Restore(context.Background(), fake, progress.NoOpReporter{}, opts)
+
+	var restoreErr *RunError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RunError", err)
+	}
+	if restoreErr.Stage != progress.CheckingDiskConsistency {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.CheckingDiskConsistency)
+	}
+	if !strings.Contains(restoreErr.Error(), "outside the .vmwarevm bundle") {
+		t.Errorf("Error() = %q, want it to mention the disk is outside the bundle", restoreErr.Error())
+	}
+	if len(fake.DiskConsistencyCalls) != 0 {
+		t.Errorf("CheckDiskConsistency called with %v, want no calls -- absolute path must be rejected before checking anything", fake.DiskConsistencyCalls)
+	}
+}
+
 func TestRestore_TargetParentDoesNotExist_FailsBeforeArchiveLookup(t *testing.T) {
 	destination := t.TempDir()
 	missingParent := filepath.Join(t.TempDir(), "does-not-exist")

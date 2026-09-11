@@ -135,7 +135,7 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return fmt.Errorf("mkdir %s: %w", filepath.Dir(target), err)
 			}
-			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode))
+			out, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, os.FileMode(hdr.Mode)&0o777)
 			if err != nil {
 				return fmt.Errorf("create %s: %w", target, err)
 			}

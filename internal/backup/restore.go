@@ -89,11 +89,7 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 		archive = a
 	}
 
-	ext := "tar.gz"
-	if archive.Manifest.Compression == "zstd" {
-		ext = "tar.zst"
-	}
-	archivePath := filepath.Join(opts.Destination, archive.ArchiveID, "archive."+ext)
+	archivePath := filepath.Join(opts.Destination, archive.ArchiveID, "archive."+archiveExt(archive.Manifest.Compression))
 
 	reporter.Report(progress.Event{Stage: progress.Verifying, Message: "verifying archive checksum"})
 	got, err := hashFile(archivePath, throttledPercentReporter(reporter, progress.Verifying, archive.Manifest.SizeBytes))
@@ -161,8 +157,17 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	if err != nil {
 		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: err}
 	}
-	if len(diskFiles) == 0 {
-		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("no virtual disks found in restored %s -- cannot verify the archive's disk chain; the extracted copy at %s has been preserved for inspection", vmxPath, stagingDir)}
+	// A disk path that's absolute in the restored vmx refers to a disk
+	// stored outside the .vmwarevm bundle on the *source* machine (Fusion
+	// permits this) -- it was never part of the archive, so bundleDir here
+	// (the extracted copy) doesn't contain it. checkDisksConsistent would
+	// otherwise resolve that path as-is and silently check the original
+	// live disk instead of anything actually restored -- reporting a
+	// passing consistency check that verified the wrong file entirely.
+	for _, diskFile := range diskFiles {
+		if filepath.IsAbs(diskFile) {
+			return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("restored VM references disk %q stored outside the .vmwarevm bundle -- this disk was not part of the archive and cannot be verified or restored; the extracted copy at %s has been preserved for inspection", diskFile, stagingDir)}
+		}
 	}
 	if err := checkDisksConsistent(ctrl, bundleDir, diskFiles); err != nil {
 		return nil, &RunError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("restored disk consistency check failed -- the archive itself may be damaged; the extracted copy at %s has been preserved for inspection: %w", stagingDir, err)}

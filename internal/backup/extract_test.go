@@ -145,6 +145,44 @@ func TestExtractArchive_PathTraversalEntry_IsRejected(t *testing.T) {
 	_ = bytes.NewReader // keep bytes imported for future assertions in this file
 }
 
+func TestExtractArchive_RegularFileSetuidBit_IsMaskedOnExtraction(t *testing.T) {
+	archivePath := filepath.Join(t.TempDir(), "setuid.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	content := []byte("x")
+	if err := tw.WriteHeader(&tar.Header{Name: "setuid.bin", Size: int64(len(content)), Mode: 0o4755, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write tar content: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err != nil {
+		t.Fatalf("extractArchive() error = %v, want nil", err)
+	}
+	info, err := os.Stat(filepath.Join(destDir, "setuid.bin"))
+	if err != nil {
+		t.Fatalf("stat extracted file: %v", err)
+	}
+	if info.Mode()&os.ModeSetuid != 0 {
+		t.Errorf("extracted file mode = %v, want setuid bit stripped", info.Mode())
+	}
+}
+
 func TestExtractArchive_SymlinkAbsoluteTarget_IsRejected(t *testing.T) {
 	// Hand-craft a tar.gz with a symlink whose target is absolute (e.g. /etc/passwd).
 	// extractArchive must reject this rather than create it.
