@@ -88,6 +88,21 @@ func TestRestoreCmd_VMWithoutLatest_ReturnsUsageError(t *testing.T) {
 	}
 }
 
+func TestRestoreCmd_LatestWithoutVM_ReturnsUsageError(t *testing.T) {
+	root := newTestRestoreRoot(t, restoreDeps{
+		loadConfig:    func(string) (*config.Config, error) { return &config.Config{Destination: t.TempDir()}, nil },
+		newController: func() (vm.Controller, error) { return vm.NewFakeVMController(), nil },
+	})
+	root.SetArgs([]string{"restore", "--latest"})
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want an error for --latest without --vm")
+	}
+}
+
 func TestRestoreCmd_MissingVMInConfig_RequiresDest(t *testing.T) {
 	destination := t.TempDir()
 	archiveID := writeFixtureArchive(t, destination, "myvm")

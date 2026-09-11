@@ -20,7 +20,11 @@ var restoreStages = []progress.Stage{
 	progress.Placing,
 }
 
-var restoreBarStages = []progress.Stage{progress.Verifying, progress.Extracting}
+// Extracting deliberately excluded: its Percent is plotted against the
+// compressed archive size (the only size known ahead of extraction), so
+// it saturates near 100% almost immediately for any real VM archive --
+// showing a bar there would be actively misleading rather than useful.
+var restoreBarStages = []progress.Stage{progress.Verifying}
 
 // RestoreInteractive renders restoreFn's progress as an interactive
 // checklist written to out, mirroring RunInteractive's shape for restore.
