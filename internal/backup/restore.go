@@ -75,6 +75,17 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	if opts.TargetDir != "" && opts.VMXPath != "" {
 		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("TargetDir and VMXPath are mutually exclusive")}
 	}
+
+	targetParent := opts.TargetDir
+	if targetParent == "" {
+		targetParent = filepath.Dir(filepath.Dir(opts.VMXPath))
+	}
+	if info, statErr := os.Stat(targetParent); statErr != nil {
+		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent directory %s: %w", targetParent, statErr)}
+	} else if !info.IsDir() {
+		return nil, &RestoreError{Stage: progress.Verifying, Err: fmt.Errorf("restore target parent %s is not a directory", targetParent)}
+	}
+
 	if runErr := checkRestoreCtx(ctx, progress.Verifying); runErr != nil {
 		return nil, runErr
 	}
@@ -91,9 +102,7 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	archivePath := filepath.Join(opts.Destination, archive.ArchiveID, "archive."+ext)
 
 	reporter.Report(progress.Event{Stage: progress.Verifying, Message: "verifying archive checksum"})
-	if err := verifyChecksum(archivePath, archive.Manifest.SHA256, func(cumulative int64) {
-		reporter.Report(progress.Event{Stage: progress.Verifying, Percent: percentOf(cumulative, archive.Manifest.SizeBytes)})
-	}); err != nil {
+	if err := verifyChecksum(archivePath, archive.Manifest.SHA256, throttledPercentReporter(reporter, progress.Verifying, archive.Manifest.SizeBytes)); err != nil {
 		return nil, &RestoreError{Stage: progress.Verifying, Err: err}
 	}
 
@@ -111,9 +120,7 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	// archive.Manifest.SizeBytes is the compressed size, an approximation
 	// for extraction's (uncompressed) total -- same clamped-at-1 tolerance
 	// percentOf already documents for Run's own Compressing stage.
-	onWrite := func(cumulative int64) {
-		reporter.Report(progress.Event{Stage: progress.Extracting, Percent: percentOf(cumulative, archive.Manifest.SizeBytes)})
-	}
+	onWrite := throttledPercentReporter(reporter, progress.Extracting, archive.Manifest.SizeBytes)
 	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, onWrite); err != nil {
 		return nil, &RestoreError{Stage: progress.Extracting, Err: err}
 	}
@@ -127,6 +134,7 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 
 	bundleBase, bundleDir, err := singleTopLevelEntry(stagingDir)
 	if err != nil {
+		keepStaging = true
 		return nil, &RestoreError{Stage: progress.Extracting, Err: err}
 	}
 
@@ -144,6 +152,10 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 		keepStaging = true
 		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: err}
 	}
+	if len(diskFiles) == 0 {
+		keepStaging = true
+		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("no virtual disks found in restored %s -- cannot verify the archive's disk chain; the extracted copy at %s has been preserved for inspection", vmxPath, stagingDir)}
+	}
 	if err := checkDisksConsistent(ctrl, bundleDir, diskFiles); err != nil {
 		keepStaging = true
 		return nil, &RestoreError{Stage: progress.CheckingDiskConsistency, Err: fmt.Errorf("restored disk consistency check failed -- the archive itself may be damaged; the extracted copy at %s has been preserved for inspection: %w", stagingDir, err)}
@@ -154,10 +166,6 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	}
 	reporter.Report(progress.Event{Stage: progress.Placing, Message: "placing restored bundle"})
 
-	targetParent := opts.TargetDir
-	if targetParent == "" {
-		targetParent = filepath.Dir(filepath.Dir(opts.VMXPath))
-	}
 	now := opts.Now
 	if now == nil {
 		now = time.Now
@@ -251,11 +259,16 @@ func findVMX(bundleDir string) (string, error) {
 	return "", fmt.Errorf("no .vmx file found in %s", bundleDir)
 }
 
+// renameFile is os.Rename, overridable in tests to force placeBundle's
+// cross-device fallback path without needing two actual filesystem
+// volumes.
+var renameFile = os.Rename
+
 // placeBundle moves src to dst via rename, falling back to a recursive
 // copy + remove on a cross-device rename error (EXDEV) -- StagingDir may
 // not share a volume with dst's parent.
 func placeBundle(src, dst string) error {
-	err := os.Rename(src, dst)
+	err := renameFile(src, dst)
 	if err == nil {
 		return nil
 	}
@@ -264,10 +277,30 @@ func placeBundle(src, dst string) error {
 		return fmt.Errorf("place bundle: %w", err)
 	}
 	if err := copyDir(src, dst, nil); err != nil {
+		_ = os.RemoveAll(dst) // partial copy -- don't leave a broken bundle at the target
 		return fmt.Errorf("copy bundle cross-device: %w", err)
 	}
 	if err := os.RemoveAll(src); err != nil {
-		return fmt.Errorf("remove staged bundle after cross-device copy: %w", err)
+		return fmt.Errorf("copy bundle cross-device: restored bundle was placed successfully at %s, but removing the temporary staging copy at %s failed (safe to delete manually): %w", dst, src, err)
 	}
 	return nil
+}
+
+// throttledPercentReporter returns an onRead/onWrite callback that reports
+// a Percent event for stage only when the rounded percentage changes --
+// io.Copy's internal ~32KB buffer would otherwise fire this once per
+// chunk (hundreds of thousands of times for a multi-GB archive),
+// throttling hashing/extraction against the TUI's render goroutine for no
+// visual benefit.
+func throttledPercentReporter(reporter progress.Reporter, stage progress.Stage, total int64) func(cumulative int64) {
+	lastReported := -1
+	return func(cumulative int64) {
+		pct := percentOf(cumulative, total)
+		rounded := int(pct*100 + 0.5)
+		if rounded == lastReported {
+			return
+		}
+		lastReported = rounded
+		reporter.Report(progress.Event{Stage: stage, Percent: pct})
+	}
 }

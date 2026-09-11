@@ -19,7 +19,7 @@ import (
 // cumulative bytes written across all files.
 func extractArchive(srcPath, destDir, compression string, onWrite func(cumulativeBytes int64)) error {
 	if _, err := os.Stat(destDir); err == nil {
-		return fmt.Errorf("extract archive: %s already exists", destDir)
+		return fmt.Errorf("extract archive: %s already exists (left by a previous failed restore attempt -- if you're not currently retrying that restore, it's safe to remove and try again)", destDir)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %s: %w", destDir, err)
 	}

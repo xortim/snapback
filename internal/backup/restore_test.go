@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -22,6 +25,16 @@ var errRestoreBoom = errors.New("boom")
 // mutate and rewrite it (e.g. to force a checksum mismatch).
 func buildFixtureArchive(t *testing.T, destination, vmName, compression string) (archiveID string, m Manifest) {
 	t.Helper()
+	vmxContent := "guestOS = \"ubuntu-64\"\nscsi0:0.fileName = \"disk.vmdk\"\n"
+	return buildFixtureArchiveVMX(t, destination, vmName, compression, vmxContent, true)
+}
+
+// buildFixtureArchiveVMX is buildFixtureArchive with the .vmx content and
+// whether to write a disk.vmdk file made explicit -- lets tests build a
+// fixture whose .vmx has no parseable disk device (writeDisk false), to
+// exercise Restore's empty-disk-list guard.
+func buildFixtureArchiveVMX(t *testing.T, destination, vmName, compression, vmxContent string, writeDisk bool) (archiveID string, m Manifest) {
+	t.Helper()
 
 	bundleName := vmName + ".vmwarevm"
 	stagingRoot := t.TempDir()
@@ -29,12 +42,13 @@ func buildFixtureArchive(t *testing.T, destination, vmName, compression string) 
 	if err := os.MkdirAll(stagedBundle, 0o700); err != nil {
 		t.Fatalf("mkdir staged bundle: %v", err)
 	}
-	vmxContent := "guestOS = \"ubuntu-64\"\nscsi0:0.fileName = \"disk.vmdk\"\n"
 	if err := os.WriteFile(filepath.Join(stagedBundle, vmName+".vmx"), []byte(vmxContent), 0o644); err != nil {
 		t.Fatalf("write vmx: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(stagedBundle, "disk.vmdk"), []byte("fake disk contents"), 0o644); err != nil {
-		t.Fatalf("write disk: %v", err)
+	if writeDisk {
+		if err := os.WriteFile(filepath.Join(stagedBundle, "disk.vmdk"), []byte("fake disk contents"), 0o644); err != nil {
+			t.Fatalf("write disk: %v", err)
+		}
 	}
 
 	archiveID = vmName + "-20260911T120000Z"
@@ -88,7 +102,8 @@ func TestRestore_HappyPath_PlacesRestoredBundle(t *testing.T) {
 		Now:         func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) },
 	}
 
-	result, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+	ctrl := vm.NewFakeVMController()
+	result, err := Restore(context.Background(), ctrl, progress.NoOpReporter{}, opts)
 	if err != nil {
 		t.Fatalf("Restore() error = %v, want nil", err)
 	}
@@ -101,6 +116,13 @@ func TestRestore_HappyPath_PlacesRestoredBundle(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(wantPath, "disk.vmdk")); err != nil {
 		t.Errorf("restored disk missing at %s: %v", wantPath, err)
+	}
+	if len(ctrl.DiskConsistencyCalls) != 1 {
+		t.Fatalf("DiskConsistencyCalls = %v, want exactly 1 call", ctrl.DiskConsistencyCalls)
+	}
+	wantSuffix := filepath.Join("myvm.vmwarevm", "disk.vmdk")
+	if !strings.HasSuffix(ctrl.DiskConsistencyCalls[0], wantSuffix) {
+		t.Errorf("DiskConsistencyCalls[0] = %q, want suffix %q", ctrl.DiskConsistencyCalls[0], wantSuffix)
 	}
 }
 
@@ -191,6 +213,54 @@ func TestRestore_DiskConsistencyFailure_PreservesStagingDir(t *testing.T) {
 	}
 }
 
+func TestRestore_NoDisksFound_FailsAndPreservesStagingDir(t *testing.T) {
+	destination := t.TempDir()
+	vmxContent := "guestOS = \"ubuntu-64\"\n" // no scsiN:N.fileName device line
+	archiveID, _ := buildFixtureArchiveVMX(t, destination, "myvm", "gzip", vmxContent, false)
+	stagingParent := t.TempDir()
+
+	opts := RestoreOptions{ArchiveID: archiveID, Destination: destination, TargetDir: t.TempDir(), StagingDir: stagingParent}
+	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+
+	var restoreErr *RestoreError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+	}
+	if restoreErr.Stage != progress.CheckingDiskConsistency {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.CheckingDiskConsistency)
+	}
+	if !strings.Contains(restoreErr.Error(), "no virtual disks") {
+		t.Errorf("Error() = %q, want it to mention \"no virtual disks\"", restoreErr.Error())
+	}
+	stagingDir := filepath.Join(stagingParent, "snapback-restore-"+archiveID)
+	if _, statErr := os.Stat(stagingDir); statErr != nil {
+		t.Errorf("staging dir %s missing, want it preserved for inspection: %v", stagingDir, statErr)
+	}
+}
+
+func TestRestore_TargetParentDoesNotExist_FailsBeforeArchiveLookup(t *testing.T) {
+	destination := t.TempDir()
+	missingParent := filepath.Join(t.TempDir(), "does-not-exist")
+
+	opts := RestoreOptions{ArchiveID: "does-not-exist-either", Destination: destination, TargetDir: missingParent}
+	_, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+
+	var restoreErr *RestoreError
+	if !errors.As(err, &restoreErr) {
+		t.Fatalf("Restore() error = %v, want a *RestoreError", err)
+	}
+	if restoreErr.Stage != progress.Verifying {
+		t.Errorf("Stage = %v, want %v", restoreErr.Stage, progress.Verifying)
+	}
+	// If the target-parent check didn't fire first, the next thing to fail
+	// would be FindArchive with a "no archive" style error rather than one
+	// naming the missing target directory -- assert on the message to
+	// prove ordering, not just the stage.
+	if !strings.Contains(restoreErr.Error(), missingParent) {
+		t.Errorf("Error() = %q, want it to name the missing target parent %q (proves the check ran before FindArchive)", restoreErr.Error(), missingParent)
+	}
+}
+
 func TestRestore_TargetCollision_AppendsNumericSuffix(t *testing.T) {
 	destination := t.TempDir()
 	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "gzip")
@@ -260,6 +330,83 @@ func TestRestoreResult_Summary(t *testing.T) {
 	want := "restore complete: /vms/myvm - backup 2026-09-11.vmwarevm"
 	if got := r.Summary(); got != want {
 		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+}
+
+func TestRestore_ZstdCompressedArchive_HappyPath(t *testing.T) {
+	if _, err := exec.LookPath("zstd"); err != nil {
+		t.Skip("zstd not installed, skipping")
+	}
+	destination := t.TempDir()
+	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "zstd")
+	targetParent := t.TempDir()
+
+	opts := RestoreOptions{
+		ArchiveID:   archiveID,
+		Destination: destination,
+		TargetDir:   targetParent,
+		Now:         func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) },
+	}
+	result, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil", err)
+	}
+	wantPath := filepath.Join(targetParent, "myvm - backup 2026-09-11.vmwarevm")
+	if result.TargetPath != wantPath {
+		t.Errorf("TargetPath = %q, want %q", result.TargetPath, wantPath)
+	}
+	if _, err := os.Stat(filepath.Join(wantPath, "myvm.vmx")); err != nil {
+		t.Errorf("restored vmx missing: %v", err)
+	}
+}
+
+func TestPlaceBundle_CrossDeviceFallback_CopiesAndRemovesSource(t *testing.T) {
+	original := renameFile
+	renameFile = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	defer func() { renameFile = original }()
+
+	src := t.TempDir()
+	if err := os.WriteFile(filepath.Join(src, "file.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write fixture file: %v", err)
+	}
+	dst := filepath.Join(t.TempDir(), "placed")
+
+	if err := placeBundle(src, dst); err != nil {
+		t.Fatalf("placeBundle() error = %v, want nil", err)
+	}
+	got, err := os.ReadFile(filepath.Join(dst, "file.txt"))
+	if err != nil || string(got) != "hello" {
+		t.Errorf("dst content = %q, %v, want %q, nil", got, err, "hello")
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Errorf("src %s still exists after successful cross-device placement, want it removed", src)
+	}
+}
+
+func TestPlaceBundle_CrossDeviceCopyFails_RemovesPartialTarget(t *testing.T) {
+	original := renameFile
+	renameFile = func(oldpath, newpath string) error {
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: syscall.EXDEV}
+	}
+	defer func() { renameFile = original }()
+
+	// A src that doesn't exist makes copyDir fail immediately (its
+	// filepath.WalkDir root stat fails), simulating a cross-device copy
+	// that dies without depending on filesystem-permission quirks that
+	// behave differently when tests run as root.
+	src := filepath.Join(t.TempDir(), "does-not-exist")
+	dst := filepath.Join(t.TempDir(), "placed")
+	if err := os.MkdirAll(filepath.Join(dst, "partial"), 0o700); err != nil {
+		t.Fatalf("pre-create partial dst: %v", err)
+	}
+
+	if err := placeBundle(src, dst); err == nil {
+		t.Fatal("placeBundle() error = nil, want an error when copyDir fails")
+	}
+	if _, statErr := os.Stat(dst); !os.IsNotExist(statErr) {
+		t.Errorf("dst %s exists after a failed cross-device copy, want it removed", dst)
 	}
 }
 
