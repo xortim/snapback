@@ -104,6 +104,45 @@ func TestRestore_HappyPath_PlacesRestoredBundle(t *testing.T) {
 	}
 }
 
+// TestRestore_VMXPathSuccessPath_PlacesBesideSourceVM exercises the
+// opts.VMXPath branch (as opposed to opts.TargetDir): when the caller
+// knows the source VM's vmx path but not an explicit target directory
+// (the common case -- restoring back beside the VM's original location
+// resolved from config, without passing --dest), targetParent is derived
+// as VMXPath's grandparent -- filepath.Dir(filepath.Dir(vmxPath)) --
+// since a .vmx file always lives directly inside its .vmwarevm bundle
+// directory, which itself lives directly inside the parent directory the
+// restored copy should be placed beside.
+func TestRestore_VMXPathSuccessPath_PlacesBesideSourceVM(t *testing.T) {
+	destination := t.TempDir()
+	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "gzip")
+	parentDir := t.TempDir()
+	vmxPath := filepath.Join(parentDir, "myvm.vmwarevm", "myvm.vmx")
+	now := func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) }
+
+	opts := RestoreOptions{
+		ArchiveID:   archiveID,
+		Destination: destination,
+		VMXPath:     vmxPath,
+		Now:         now,
+	}
+
+	result, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil", err)
+	}
+	wantPath := filepath.Join(parentDir, "myvm - backup 2026-09-11.vmwarevm")
+	if result.TargetPath != wantPath {
+		t.Errorf("TargetPath = %q, want %q", result.TargetPath, wantPath)
+	}
+	if _, err := os.Stat(filepath.Join(wantPath, "myvm.vmx")); err != nil {
+		t.Errorf("restored vmx missing at %s: %v", wantPath, err)
+	}
+	if _, err := os.Stat(filepath.Join(wantPath, "disk.vmdk")); err != nil {
+		t.Errorf("restored disk missing at %s: %v", wantPath, err)
+	}
+}
+
 func TestRestore_ChecksumMismatch_FailsBeforeExtracting(t *testing.T) {
 	destination := t.TempDir()
 	archiveID, m := buildFixtureArchive(t, destination, "myvm", "gzip")
