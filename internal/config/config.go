@@ -25,8 +25,8 @@ type Retention struct {
 }
 
 type VM struct {
-	Name     string `koanf:"name" yaml:"name"`
-	VMX      string `koanf:"vmx" yaml:"vmx"`
+	Name string `koanf:"name" yaml:"name"`
+	VMX  string `koanf:"vmx" yaml:"vmx"`
 	// Schedule is one of "", "daily", "weekly", "monthly" -- see ADR-005
 	// (docs/superpowers/specs/2026-09-11-launchd-scheduling-design.md).
 	// "" means unscheduled: no LaunchAgent is generated for this VM.
