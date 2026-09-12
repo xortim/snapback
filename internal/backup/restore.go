@@ -37,6 +37,16 @@ func (r *RestoreResult) Summary() string {
 	return fmt.Sprintf("restore complete: %s", r.TargetPath)
 }
 
+// NextSteps implements internal/tui's pipelineResult interface. Restore
+// never registers the restored bundle with Fusion or opens it (see ADR-004,
+// docs/superpowers/specs/2026-09-11-restore-design.md -- Vimalin, a
+// comparable third-party VMware backup tool, makes the same choice and
+// leaves this entirely to the operator too) -- Fusion has no notion that
+// this VM exists until it's opened at least once.
+func (r *RestoreResult) NextSteps() string {
+	return fmt.Sprintf("next: open %q in Finder (or run `open %q`) to add it to Fusion's VM library -- Fusion's \"Scan for Virtual Machines\" only finds bundles already sitting in its default library folders, so it won't help for a --dest outside those", r.TargetPath, r.TargetPath)
+}
+
 // Restore verifies a backup archive against its manifest checksum,
 // extracts it, confirms the restored disk chain is consistent, and places
 // it as a new, non-destructively-named .vmwarevm bundle -- never
@@ -177,6 +187,21 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 		return nil, runErr
 	}
 	reporter.Report(progress.Event{Stage: progress.Placing, Message: "placing restored bundle"})
+
+	// Fusion decides whether a VM "was moved or copied" by hashing its
+	// current path against uuid.location in the .vmx -- which never
+	// matches here, since every restore lands at a brand-new path. Left
+	// alone, that prompts the operator the first time the restored bundle
+	// is opened. Restore always produces a copy -- the source is left
+	// untouched at its original location (see this function's doc comment)
+	// -- so "I Copied It" (a fresh BIOS UUID and MAC address) is the only
+	// correct answer, never "I Moved It" (keep the source's identity),
+	// which would leave two VMs claiming the same UUID/MAC if the source
+	// is ever powered on at the same time. uuid.action = "create" tells
+	// Fusion to silently apply that answer instead of asking.
+	if err := setVMXKey(vmxPath, "uuid.action", "create"); err != nil {
+		return nil, &RunError{Stage: progress.Placing, Err: fmt.Errorf("set restored VM identity: %w", err)}
+	}
 
 	now := opts.Now
 	if now == nil {

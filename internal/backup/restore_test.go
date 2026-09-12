@@ -126,6 +126,37 @@ func TestRestore_HappyPath_PlacesRestoredBundle(t *testing.T) {
 	}
 }
 
+// TestRestore_SetsUUIDActionCreate covers the fix for VMware Fusion's
+// "this virtual machine may have been moved or copied" prompt: Restore
+// always places a copy at a brand-new path, so uuid.action = "create" must
+// be written into the restored .vmx to make Fusion silently answer "I
+// Copied It" (fresh UUID + MAC) instead of asking, the first time the
+// restored bundle is opened.
+func TestRestore_SetsUUIDActionCreate(t *testing.T) {
+	destination := t.TempDir()
+	archiveID, _ := buildFixtureArchive(t, destination, "myvm", "gzip")
+	targetParent := t.TempDir()
+
+	opts := RestoreOptions{
+		ArchiveID:   archiveID,
+		Destination: destination,
+		TargetDir:   targetParent,
+		Now:         func() time.Time { return time.Date(2026, 9, 11, 0, 0, 0, 0, time.UTC) },
+	}
+
+	result, err := Restore(context.Background(), vm.NewFakeVMController(), progress.NoOpReporter{}, opts)
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil", err)
+	}
+	vmxContents, err := os.ReadFile(filepath.Join(result.TargetPath, "myvm.vmx"))
+	if err != nil {
+		t.Fatalf("read restored vmx: %v", err)
+	}
+	if !strings.Contains(string(vmxContents), `uuid.action = "create"`) {
+		t.Errorf("restored vmx = %q, want it to contain uuid.action = \"create\"", vmxContents)
+	}
+}
+
 // TestRestore_VMXPathSuccessPath_PlacesBesideSourceVM exercises the
 // opts.VMXPath branch (as opposed to opts.TargetDir): when the caller
 // knows the source VM's vmx path but not an explicit target directory
@@ -476,6 +507,20 @@ func TestRestoreResult_Summary(t *testing.T) {
 	want := "restore complete: /vms/myvm - backup 2026-09-11.vmwarevm"
 	if got := r.Summary(); got != want {
 		t.Errorf("Summary() = %q, want %q", got, want)
+	}
+}
+
+func TestRestoreResult_NextSteps_MentionsTargetPath(t *testing.T) {
+	r := &RestoreResult{TargetPath: "/vms/myvm - backup 2026-09-11.vmwarevm"}
+	if got := r.NextSteps(); !strings.Contains(got, r.TargetPath) {
+		t.Errorf("NextSteps() = %q, want it to mention %q", got, r.TargetPath)
+	}
+}
+
+func TestResult_NextSteps_IsEmpty(t *testing.T) {
+	r := &Result{ArchivePath: "/dest/myvm-x/archive.tar.zst"}
+	if got := r.NextSteps(); got != "" {
+		t.Errorf("NextSteps() = %q, want empty (a backup needs no follow-up)", got)
 	}
 }
 

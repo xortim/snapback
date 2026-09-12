@@ -58,6 +58,27 @@ func TestView_Success_ShowsArchivePath(t *testing.T) {
 	}
 }
 
+// TestView_Success_RestoreResult_ShowsNextSteps covers view.go's rendering
+// of pipelineResult.NextSteps() below Summary() -- *backup.RestoreResult
+// has one (open the bundle to register it with Fusion), unlike
+// *backup.Result, whose empty NextSteps() prints nothing (see
+// TestView_Success_ShowsArchivePath, which asserts the opposite for a
+// backup).
+func TestView_Success_RestoreResult_ShowsNextSteps(t *testing.T) {
+	m := newModel("snapback restore myvm-x", func() {}, nil, nil)
+	result := &backup.RestoreResult{TargetPath: "/vms/myvm - backup 2026-09-11.vmwarevm"}
+	updated, _ := m.Update(resultMsg{result: result})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, result.Summary()) {
+		t.Errorf("view = %q, want the restore summary line", view)
+	}
+	if !strings.Contains(view, result.NextSteps()) {
+		t.Errorf("view = %q, want the restore's next-steps hint", view)
+	}
+}
+
 // TestView_Success_NilResult_DoesNotPanic covers a backupFn returning
 // (nil, nil) -- a valid Go zero-value combination the compiler doesn't
 // prevent, and not something backup.Run itself does today, but Model and
@@ -75,7 +96,7 @@ func TestView_Success_NilResult_DoesNotPanic(t *testing.T) {
 	}
 }
 
-func TestView_Failure_ShowsErrorAndCrossIcon(t *testing.T) {
+func TestView_Failure_ShowsErrorOnFailedRowOnly(t *testing.T) {
 	m := newRunModel("myvm", func() {})
 	updated, _ := m.Update(eventMsg(progress.Event{Stage: progress.Merging, Message: "merging snapshot back"}))
 	m = updated.(Model)
@@ -83,11 +104,32 @@ func TestView_Failure_ShowsErrorAndCrossIcon(t *testing.T) {
 	m = updated.(Model)
 
 	view := m.View()
-	if !strings.Contains(view, "✗ merging") {
-		t.Errorf("view = %q, want merging marked failed", view)
+	if !strings.Contains(view, "✗ merging - "+errBoom.Error()) {
+		t.Errorf("view = %q, want merging marked failed with the error message", view)
 	}
-	if !strings.Contains(view, "error:") {
-		t.Errorf("view = %q, want an error summary line", view)
+	// The failed row above already carries the full error message -- a
+	// second "error: <same message>" summary line would just repeat it
+	// (confirmed real case, 2026-09-11: this showed the same multi-line
+	// error twice in the terminal). See view.go's finished-state switch.
+	if strings.Count(view, errBoom.Error()) != 1 {
+		t.Errorf("view = %q, want the error message to appear exactly once", view)
+	}
+}
+
+// TestView_Failure_NoMatchingRow_FallsBackToSummaryLine covers the
+// defensive branch view.go's finished-state switch falls back to when no
+// row is marked failed -- not exercised by run/restore's own fixed stage
+// lists (applyFinalStatus's own fallback always marks row 0 failed when
+// nothing else matches), but Model is exported, so nothing stops a future
+// caller from constructing one with an empty stages list.
+func TestView_Failure_NoMatchingRow_FallsBackToSummaryLine(t *testing.T) {
+	m := newModel("myvm", func() {}, nil, nil)
+	updated, _ := m.Update(resultMsg{err: errBoom})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "error: "+errBoom.Error()) {
+		t.Errorf("view = %q, want the fallback error summary line when there are no rows", view)
 	}
 }
 

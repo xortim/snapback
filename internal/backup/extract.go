@@ -109,6 +109,21 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			return fmt.Errorf("tar entry %q escapes destination directory", hdr.Name)
 		}
 
+		// Older archives (created before createArchive started excluding
+		// these) may still carry a Fusion "<file>.lck" directory copied
+		// from the live source VM -- process-specific lock state that's
+		// meaningless once restored elsewhere, and actively harmful:
+		// vmware-vdiskmanager -e mistakes a restored, stale lock directory
+		// for one another process already has the disk open, failing the
+		// post-extraction disk consistency check over nothing (confirmed
+		// real case, 2026-09-11). Drop any such entry on extraction too,
+		// so an archive made before that fix still restores cleanly. This
+		// runs after the traversal check above so a tampered entry can't
+		// dodge it just by ending in ".lck".
+		if hasLockDirComponent(hdr) {
+			continue
+		}
+
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, 0o700); err != nil {
@@ -157,6 +172,27 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			// rather than fail the whole restore over it.
 		}
 	}
+}
+
+// hasLockDirComponent reports whether hdr names an entry that createArchive
+// would have excluded as a Fusion lock directory ("<file>.lck"): either the
+// entry is itself such a directory, or it's nested under one as an ancestor
+// path component. A plain file whose own name happens to end in ".lck" is
+// left alone, matching createArchive's directory-only exclusion (see its
+// call site in untarFrom) -- so a genuine file with that suffix that
+// createArchive did include isn't silently dropped on restore.
+func hasLockDirComponent(hdr *tar.Header) bool {
+	parts := strings.Split(strings.Trim(hdr.Name, "/"), "/")
+	for i, part := range parts {
+		isEntryItself := i == len(parts)-1
+		if isEntryItself && hdr.Typeflag != tar.TypeDir {
+			continue
+		}
+		if isLockDirName(part) {
+			return true
+		}
+	}
+	return false
 }
 
 // isWithinDir reports whether target, once resolved relative to dir,

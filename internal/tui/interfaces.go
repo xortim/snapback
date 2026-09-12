@@ -8,6 +8,9 @@ import "github.com/xortim/snapback/internal/progress"
 // directly.
 type pipelineResult interface {
 	Summary() string
+	// NextSteps returns a follow-up hint to show below Summary, or "" if
+	// there's nothing left for the operator to do.
+	NextSteps() string
 }
 
 // pipelineError is implemented by *backup.RunError -- shared by both Run
