@@ -20,10 +20,10 @@ retention:
 vms:
   - name: dev-ubuntu
     vmx: /Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
-    schedule: "0 2 * * *"
+    schedule: daily
   - name: win-testbed
     vmx: /Users/testuser/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
-    schedule: "0 2 * * 0"
+    schedule: weekly
 notifications:
   enabled: true
 `
@@ -46,7 +46,7 @@ notifications:
 	if len(cfg.VMs) != 2 {
 		t.Fatalf("len(VMs) = %d, want 2", len(cfg.VMs))
 	}
-	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "/Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "0 2 * * *" {
+	if cfg.VMs[0].Name != "dev-ubuntu" || cfg.VMs[0].VMX != "/Users/testuser/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx" || cfg.VMs[0].Schedule != "daily" {
 		t.Errorf("VMs[0] = %+v, unexpected", cfg.VMs[0])
 	}
 	if cfg.VMs[1].Name != "win-testbed" {
