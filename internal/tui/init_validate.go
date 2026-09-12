@@ -95,20 +95,6 @@ func validateNonNegativeInt(s string) error {
 	return nil
 }
 
-// validateCronExpression is a lightweight sanity check -- exactly 5
-// space-separated fields -- not a full cron grammar validator. No
-// cron-parsing dependency exists in this module (nothing parses or
-// executes config.VM.Schedule yet; see CLAUDE.md's "Other components"
-// table), so this only catches the most common typo (wrong field count)
-// rather than validating minute/hour/day ranges.
-func validateCronExpression(s string) error {
-	fields := strings.Fields(s)
-	if len(fields) != 5 {
-		return fmt.Errorf("cron expression must have 5 space-separated fields (minute hour day month weekday), got %d", len(fields))
-	}
-	return nil
-}
-
 // acceptBlankInAccessibleMode wraps validate so a blank/whitespace-only
 // answer passes immediately when accessible is true, deferring to
 // whatever default huh's accessible-mode PromptString substitutes

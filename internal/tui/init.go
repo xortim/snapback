@@ -296,14 +296,10 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 }
 
 // promptSchedules asks a schedule preset for each VM in vms, in order,
-// mutating vms[i].Schedule in place. The custom-cron question is always
-// asked (see resolveSchedule's doc comment for why), gated only by its
-// own Validate closure checking the choice already made in the same
-// VM's prior group.
+// mutating vms[i].Schedule in place.
 func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM) error {
 	for i := range vms {
 		choice := scheduleChoiceNone
-		var custom string
 
 		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
@@ -312,22 +308,11 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 					Options(huh.NewOptions(scheduleChoices...)...).
 					Value(&choice),
 			),
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Custom cron expression (only used if 'custom' was chosen above)").
-					Validate(func(s string) error {
-						if choice != scheduleChoiceCustom {
-							return nil
-						}
-						return validateCronExpression(s)
-					}).
-					Value(&custom),
-			),
 		)
 		if err != nil {
 			return err
 		}
-		vms[i].Schedule = resolveSchedule(choice, custom)
+		vms[i].Schedule = resolveSchedule(choice)
 	}
 	return nil
 }
