@@ -27,3 +27,17 @@ func resolveSchedule(choice string) string {
 	}
 	return choice
 }
+
+// scheduleChoiceFor turns a config.VM.Schedule value back into the
+// matching scheduleChoices entry -- the reverse of resolveSchedule.
+// Used to seed promptSchedules' per-VM default from a prior config's
+// existing schedule instead of always starting at "none": every choice
+// except "none" already doubles as its own Schedule value (see
+// resolveSchedule's doc comment), so the only special case is the
+// unscheduled "" value, which maps back to "none".
+func scheduleChoiceFor(schedule string) string {
+	if schedule == "" {
+		return scheduleChoiceNone
+	}
+	return schedule
+}

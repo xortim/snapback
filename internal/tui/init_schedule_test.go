@@ -31,3 +31,21 @@ func TestScheduleChoices_ListsAllFourPresetsInOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestScheduleChoiceFor(t *testing.T) {
+	tests := []struct {
+		name     string
+		schedule string
+		want     string
+	}{
+		{"empty resolves to none", "", scheduleChoiceNone},
+		{"daily passes through", "daily", scheduleChoiceDaily},
+		{"weekly passes through", "weekly", scheduleChoiceWeekly},
+		{"monthly passes through", "monthly", scheduleChoiceMonthly},
+	}
+	for _, tt := range tests {
+		if got := scheduleChoiceFor(tt.schedule); got != tt.want {
+			t.Errorf("%s: scheduleChoiceFor(%q) = %q, want %q", tt.name, tt.schedule, got, tt.want)
+		}
+	}
+}
