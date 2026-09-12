@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
 )
 
@@ -27,6 +28,8 @@ type initDeps struct {
 	isTerminal   func(w io.Writer) bool
 	isTerminalIn func(r io.Reader) bool
 	runWizard    func(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []tui.VMCandidate, prior *config.Config) (*config.Config, error)
+	newInstaller func() (launchd.Installer, error)
+	executable   func() (string, error)
 }
 
 func newInitCmd() *cobra.Command {
@@ -40,6 +43,8 @@ func newInitCmd() *cobra.Command {
 		isTerminal:   defaultIsTerminal,
 		isTerminalIn: defaultIsTerminalIn,
 		runWizard:    tui.RunInitWizard,
+		newInstaller: defaultNewInstaller,
+		executable:   os.Executable,
 	})
 }
 
@@ -182,6 +187,12 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	}
 	if err := deps.writeFile(configPath, data); err != nil {
 		return fmt.Errorf("write config: %w", err)
+	}
+
+	if deps.newInstaller != nil {
+		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.VMs); err != nil {
+			return err
+		}
 	}
 
 	_, err = fmt.Fprintf(out, "wrote config to %s\n", configPath)

@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
 )
 
@@ -609,5 +610,50 @@ func TestInitCmd_WriteFileError_IsWrapped(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "write config") || !strings.Contains(err.Error(), errBoom.Error()) {
 		t.Fatalf("Execute() error = %v, want it to wrap %q with \"write config\" context", err, errBoom)
+	}
+}
+
+func TestInitCmd_SyncsLaunchdSchedules(t *testing.T) {
+	cfg := &config.Config{
+		Destination: "/dest",
+		Compression: "zstd",
+		VMs:         []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}},
+	}
+	var written []byte
+	var writtenPath string
+	deps := initDeps{
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:  func(string) (*config.Config, error) { return nil, errBoom },
+		marshal:     config.Marshal,
+		writeFile: func(path string, data []byte) error {
+			writtenPath = path
+			written = data
+			return nil
+		},
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return false },
+		isTerminalIn: func(io.Reader) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
+			return cfg, nil
+		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if writtenPath != "/cfg/config.yaml" {
+		t.Fatalf("writeFile path = %q, want %q", writtenPath, "/cfg/config.yaml")
+	}
+	_ = written
+	if !strings.Contains(out.String(), "installed: dev") {
+		t.Errorf("stdout = %q, want \"installed: dev\" from the auto-sync", out.String())
 	}
 }
