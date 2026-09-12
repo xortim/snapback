@@ -296,10 +296,30 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 }
 
 // promptSchedules asks a schedule preset for each VM in vms, in order,
-// mutating vms[i].Schedule in place.
-func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM) error {
+// mutating vms[i].Schedule in place. When prior is non-nil (an existing
+// config.yaml found under `init --force`, per #52), each VM's starting
+// choice is seeded from the matching prior VM's existing Schedule --
+// matched by VMX, the one field guaranteed unique per bundle (see
+// selectVMs) -- instead of always starting at "none". Without this,
+// init --force silently proposed erasing every VM's schedule on each
+// rerun; now that runInit auto-syncs LaunchAgents right after writing
+// config (internal/cli/init.go), that would go on to actually delete
+// working scheduled backups, not just reset a config field. A VM with
+// no match in prior (renamed, or newly selected this run) still starts
+// at "none", same as a fresh init.
+func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM, prior *config.Config) error {
+	priorByVMX := make(map[string]string, len(vms))
+	if prior != nil {
+		for _, p := range prior.VMs {
+			priorByVMX[p.VMX] = p.Schedule
+		}
+	}
+
 	for i := range vms {
 		choice := scheduleChoiceNone
+		if schedule, ok := priorByVMX[vms[i].VMX]; ok {
+			choice = scheduleChoiceFor(schedule)
+		}
 
 		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
@@ -401,9 +421,11 @@ func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessib
 // non-terminal stdin (a pipe, a test's strings.Reader) correctly. It's
 // also how this package's own tests drive the wizard deterministically.
 //
-// prior is forwarded to promptCoreSettings -- see its doc comment. VM
-// selection and schedules are unaffected by prior; only core settings
-// seed from an existing config.
+// prior is forwarded to promptCoreSettings and promptSchedules -- see
+// their doc comments. VM selection itself is unaffected by prior (a
+// fresh init and init --force offer the same discovered candidates);
+// core settings and each selected VM's schedule seed their defaults
+// from an existing config when prior is non-nil.
 func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate, prior *config.Config) (*config.Config, error) {
 	vms, err := selectVMs(ctx, in, out, accessible, candidates)
 	if err != nil {
@@ -418,7 +440,7 @@ func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible 
 		return nil, err
 	}
 
-	if err := promptSchedules(ctx, in, out, accessible, vms); err != nil {
+	if err := promptSchedules(ctx, in, out, accessible, vms, prior); err != nil {
 		return nil, err
 	}
 

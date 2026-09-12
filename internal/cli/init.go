@@ -122,9 +122,12 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 
 	// --force over an established config: seed the wizard's defaults from
 	// what's already there (see internal/tui/init.go's promptCoreSettings
-	// doc comment) instead of silently proposing to reset
-	// destination/compression/retention/notifications back to factory
-	// defaults. A failure to load the existing config doesn't abort
+	// and promptSchedules doc comments) instead of silently proposing to
+	// reset destination/compression/retention/notifications/schedules
+	// back to factory defaults or "none" -- runInit auto-syncs
+	// LaunchAgents right after writing config below, so a reset schedule
+	// here doesn't just change a config field, it deletes a working
+	// LaunchAgent. A failure to load the existing config doesn't abort
 	// init -- --force re-running over a config that's gone stale or
 	// unparseable is itself a legitimate reason to run init, so this
 	// falls back to the hardcoded defaults instead of blocking that.
