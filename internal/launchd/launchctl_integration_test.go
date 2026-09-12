@@ -47,3 +47,18 @@ func TestIntegration_BootstrapThenBootout(t *testing.T) {
 		}
 	})
 }
+
+// TestIntegration_BootoutNeverBootstrapped is the one place the
+// "not loaded" tolerance in LaunchctlInstaller.Bootout (isNotLoadedError)
+// can actually be confirmed: the exact message and exit code launchctl
+// emits for an unloaded label aren't reproducible without real launchd,
+// so the implementation tolerates several known forms defensively. If
+// this test ever fails, launchctl is reporting something none of those
+// forms match -- add it there rather than relaxing this assertion.
+func TestIntegration_BootoutNeverBootstrapped(t *testing.T) {
+	requireIntegration(t)
+	inst := &launchd.LaunchctlInstaller{Dir: t.TempDir()}
+	if err := inst.Bootout("com.tim.snapback.integration-never-bootstrapped"); err != nil {
+		t.Errorf("Bootout() on a label that was never bootstrapped = %v, want nil (idempotent removal)", err)
+	}
+}

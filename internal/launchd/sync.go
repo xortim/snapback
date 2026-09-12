@@ -21,10 +21,12 @@ func (r SyncResult) IsEmpty() bool {
 }
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM
-// with a non-empty Schedule gets its plist written and bootstrapped (if
-// new) or re-bootstrapped (if its content changed since last sync);
-// every plist installer already knows about that no longer corresponds
-// to a scheduled VM in vms gets booted out and removed. Safe to call
+// with a non-empty Schedule gets its plist written and (re-)bootstrapped
+// if it's new or its content changed since the last sync -- always
+// booted out first, so a stale or hand-orphaned loaded job can't make
+// Bootstrap fail. Every plist installer already knows about that no
+// longer corresponds to a scheduled VM in vms gets booted out and
+// removed. Safe to call
 // repeatedly -- an already-in-sync config produces an empty SyncResult
 // and no Installer calls beyond the one List().
 //
@@ -72,19 +74,28 @@ func Sync(installer Installer, vms []config.VM, binaryPath string) (SyncResult, 
 		if err != nil {
 			return result, fmt.Errorf("write plist for %q: %w", agent.VMName, err)
 		}
-		switch {
-		case !existing[agent.Label]:
-			if err := installer.Bootstrap(plistPath); err != nil {
-				return result, fmt.Errorf("bootstrap %q: %w", agent.VMName, err)
-			}
+		install := !existing[agent.Label]
+		if !install && !changed {
+			continue
+		}
+		// Bootout before Bootstrap on *both* paths, not just the update
+		// path. Bootstrap fails against an already-loaded label, and
+		// "install" here only means "no plist on disk" (that's all
+		// Installer.List can see) -- a job can still be loaded in
+		// launchd's session with its plist deleted by hand, which would
+		// otherwise make an unrelated command like `vm add` fail after it
+		// had already written config.yaml. Bootout is idempotent for a
+		// label that isn't loaded (see isNotLoadedError), so the extra
+		// call is free on the normal install path.
+		if err := installer.Bootout(agent.Label); err != nil {
+			return result, fmt.Errorf("bootout stale %q: %w", agent.VMName, err)
+		}
+		if err := installer.Bootstrap(plistPath); err != nil {
+			return result, fmt.Errorf("bootstrap %q: %w", agent.VMName, err)
+		}
+		if install {
 			result.Installed = append(result.Installed, agent.VMName)
-		case changed:
-			if err := installer.Bootout(agent.Label); err != nil {
-				return result, fmt.Errorf("bootout stale %q: %w", agent.VMName, err)
-			}
-			if err := installer.Bootstrap(plistPath); err != nil {
-				return result, fmt.Errorf("bootstrap %q: %w", agent.VMName, err)
-			}
+		} else {
 			result.Updated = append(result.Updated, agent.VMName)
 		}
 	}

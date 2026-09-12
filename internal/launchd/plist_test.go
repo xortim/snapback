@@ -69,6 +69,11 @@ func TestRenderPlist_Daily(t *testing.T) {
 		<string>--vm</string>
 		<string>dev</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+	</dict>
 	<key>StartCalendarInterval</key>
 	<dict>
 		<key>Hour</key>
@@ -133,6 +138,35 @@ func TestRenderPlist_EscapesXMLSpecialCharacters(t *testing.T) {
 	}
 	if !strings.Contains(string(got), "dev &amp; &lt;test&gt;") {
 		t.Errorf("renderPlist() = %s, want the VMName XML-escaped", got)
+	}
+}
+
+func TestRenderPlist_PATHIncludesHomebrewPrefixes(t *testing.T) {
+	agent := Agent{Label: "l", VMName: "v", BinaryPath: "/bin/snapback", LogPath: "/log", Interval: calendarInterval("daily")}
+	got, err := renderPlist(agent)
+	if err != nil {
+		t.Fatalf("renderPlist() error = %v", err)
+	}
+	// launchd's default agent PATH omits both Homebrew prefixes, and
+	// internal/backup/archive.go falls back from zstd to gzip *silently*
+	// when exec.LookPath misses -- so a scheduled run would quietly
+	// produce a different archive format than a manual one.
+	for _, dir := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+		if !strings.Contains(string(got), dir) {
+			t.Errorf("plist PATH is missing %s, so a Homebrew-installed zstd wouldn't resolve in a scheduled run:\n%s", dir, got)
+		}
+	}
+	if !strings.Contains(string(got), "<key>EnvironmentVariables</key>") {
+		t.Errorf("plist has no EnvironmentVariables dict:\n%s", got)
+	}
+}
+
+func TestShortLabel(t *testing.T) {
+	if got := ShortLabel("com.tim.snapback.my-vm"); got != "my-vm" {
+		t.Errorf("ShortLabel() = %q, want %q", got, "my-vm")
+	}
+	if got := ShortLabel("something-else"); got != "something-else" {
+		t.Errorf("ShortLabel() on an unprefixed label = %q, want it returned unchanged", got)
 	}
 }
 

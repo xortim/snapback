@@ -8,8 +8,9 @@ import (
 
 func TestLaunchctlInstaller_WriteThenList(t *testing.T) {
 	dir := t.TempDir()
+	logDir := filepath.Join(t.TempDir(), "Logs", "snapback")
 	inst := &LaunchctlInstaller{Dir: dir}
-	agent := Agent{Label: "com.tim.snapback.dev", VMName: "dev", BinaryPath: "/bin/snapback", LogPath: "/log", Interval: calendarInterval("daily")}
+	agent := Agent{Label: "com.tim.snapback.dev", VMName: "dev", BinaryPath: "/bin/snapback", LogPath: filepath.Join(logDir, "dev.log"), Interval: calendarInterval("daily")}
 
 	path, changed, err := inst.Write(agent)
 	if err != nil {
@@ -23,6 +24,15 @@ func TestLaunchctlInstaller_WriteThenList(t *testing.T) {
 	}
 	if _, err := os.Stat(path); err != nil {
 		t.Errorf("plist file not written: %v", err)
+	}
+
+	// launchd won't create StandardOutPath's parent directory itself --
+	// if Write doesn't, a scheduled run produces no log at all.
+	info, err := os.Stat(logDir)
+	if err != nil {
+		t.Errorf("log directory %s not created by Write(): %v", logDir, err)
+	} else if !info.IsDir() {
+		t.Errorf("%s exists but is not a directory", logDir)
 	}
 
 	labels, err := inst.List()

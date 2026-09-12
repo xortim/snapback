@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"text/template"
 
 	"github.com/xortim/snapback/internal/config"
@@ -16,6 +17,24 @@ import (
 // com.tim.snapback.plist name docs/design.md already documents for the
 // pre-this-ADR single global plist).
 const labelPrefix = "com.tim.snapback."
+
+// ShortLabel strips the reverse-DNS labelPrefix from a launchd label,
+// leaving the sanitized VM name. SyncResult.Removed holds raw labels
+// (the VM is gone from config by then, so there's no name to report
+// instead) -- CLI printers use this so the user sees "myvm" rather than
+// "com.tim.snapback.myvm". A label without the prefix is returned
+// unchanged.
+func ShortLabel(label string) string {
+	return strings.TrimPrefix(label, labelPrefix)
+}
+
+// agentPATH is the PATH every generated LaunchAgent runs with. launchd
+// gives an agent a minimal PATH (/usr/bin:/bin:/usr/sbin:/sbin) that
+// excludes both Homebrew prefixes, and internal/backup/archive.go
+// resolves zstd via exec.LookPath with a *silent* gzip fallback -- so
+// without this, a Homebrew-zstd user would get zstd archives from a
+// manual `run` and gzip archives from the identical scheduled one.
+const agentPATH = "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 // Agent describes one VM's scheduled backup job -- everything
 // renderPlist needs to produce that VM's LaunchAgent plist.
@@ -89,6 +108,11 @@ const plistTmplSrc = `<?xml version="1.0" encoding="UTF-8"?>
 		<string>--vm</string>
 		<string>{{esc .VMName}}</string>
 	</array>
+	<key>EnvironmentVariables</key>
+	<dict>
+		<key>PATH</key>
+		<string>` + agentPATH + `</string>
+	</dict>
 	<key>StartCalendarInterval</key>
 	<dict>
 {{- range .Interval}}

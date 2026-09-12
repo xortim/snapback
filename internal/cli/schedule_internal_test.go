@@ -63,6 +63,35 @@ func TestScheduleSyncCmd_InstallsNewSchedule(t *testing.T) {
 	}
 }
 
+func TestScheduleSyncCmd_Removed_PrintsVMNameNotRawLabel(t *testing.T) {
+	// Pre-install "dev", then sync against a config that no longer has it.
+	inst := launchd.NewFakeInstaller()
+	if _, err := launchd.Sync(inst, []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}, "/bin/snapback"); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	deps := scheduleDeps{
+		loadConfig:   func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		newInstaller: func() (launchd.Installer, error) { return inst, nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForSchedule(t, deps)
+	root.SetArgs([]string{"schedule", "sync", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "removed: dev\n") {
+		t.Errorf("stdout = %q, want \"removed: dev\"", out.String())
+	}
+	if strings.Contains(out.String(), "com.tim.snapback.") {
+		t.Errorf("stdout = %q, want the raw launchd label prefix stripped", out.String())
+	}
+}
+
 func TestScheduleSyncCmd_ConfigLoadError_IsWrapped(t *testing.T) {
 	deps := scheduleDeps{
 		loadConfig: func(string) (*config.Config, error) { return nil, errBoom },

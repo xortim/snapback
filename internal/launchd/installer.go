@@ -2,6 +2,7 @@ package launchd
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -73,6 +74,16 @@ func (l *LaunchctlInstaller) Write(agent Agent) (string, bool, error) {
 	if err := os.MkdirAll(l.Dir, 0o755); err != nil {
 		return "", false, fmt.Errorf("create %s: %w", l.Dir, err)
 	}
+	// The plist's StandardOutPath/StandardErrorPath point at
+	// ~/Library/Logs/snapback/<label>.log; launchd won't create that
+	// directory itself, so a scheduled run would produce no log at all on
+	// a fresh install unless we create it here.
+	if agent.LogPath != "" {
+		logDir := filepath.Dir(agent.LogPath)
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			return "", false, fmt.Errorf("create %s: %w", logDir, err)
+		}
+	}
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		return "", false, fmt.Errorf("write %s: %w", path, err)
 	}
@@ -85,12 +96,34 @@ func (l *LaunchctlInstaller) Bootstrap(plistPath string) error {
 
 func (l *LaunchctlInstaller) Bootout(label string) error {
 	err := runLaunchctl("bootout", guiDomain()+"/"+label)
-	// "Could not find service" means the label isn't currently loaded --
-	// Sync's contract is idempotent removal, so that's not an error here.
-	if err != nil && strings.Contains(err.Error(), "Could not find service") {
+	if err != nil && isNotLoadedError(err) {
 		return nil
 	}
 	return err
+}
+
+// isNotLoadedError reports whether err from `launchctl bootout` means
+// "that label wasn't loaded in the first place" rather than a real
+// failure. Sync's contract is idempotent removal (and, since the install
+// path also boots out defensively before bootstrapping, idempotent
+// install), so this must not surface as an error.
+//
+// Deliberately defensive: launchctl's exact wording here isn't
+// verifiable in this environment (no live macOS/launchd in CI), and it
+// has differed across releases -- "Could not find service" is what
+// `launchctl print` emits, while modern `bootout gui/<uid>/<label>` on
+// an unloaded label reports "Boot-out failed: 3: No such process" and
+// exits 3. All three forms are tolerated rather than betting on one.
+// TestIntegration_BootoutNeverBootstrapped (launchctl_integration_test.go,
+// behind -tags=integration + SNAPBACK_INTEGRATION=1) is where this
+// should eventually be confirmed against real launchd.
+func isNotLoadedError(err error) bool {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
+		return true
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "Could not find service") || strings.Contains(msg, "No such process")
 }
 
 func (l *LaunchctlInstaller) Remove(label string) error {

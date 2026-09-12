@@ -102,8 +102,13 @@ func printSyncResult(out io.Writer, result launchd.SyncResult) error {
 			return err
 		}
 	}
+	// Removed holds raw launchd labels, not VM names (by then the VM is
+	// gone from config, so there's no name left to report) -- strip the
+	// reverse-DNS prefix so this reads like the two lines above it, and
+	// doesn't restate `vm remove foo`'s own message in a different
+	// vocabulary.
 	for _, label := range result.Removed {
-		if _, err := fmt.Fprintf(out, "removed: %s\n", label); err != nil {
+		if _, err := fmt.Fprintf(out, "removed: %s\n", launchd.ShortLabel(label)); err != nil {
 			return err
 		}
 	}
