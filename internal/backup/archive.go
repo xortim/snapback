@@ -136,18 +136,21 @@ func tarTo(srcDir string, w io.Writer, onRead func(cumulativeBytes int64)) error
 			return nil
 		}
 		// Fusion creates a "<file>.lck" directory (holding a per-process
-		// "M<pid>.lck" file) next to any .vmx or .vmdk currently open --
-		// which, for the .vmdk case, is guaranteed to exist here: this
-		// walks the live bundle while the VM is still running, mid-copy,
-		// by design (see Run's doc comment). That lock state is
-		// process-specific and meaningless once copied elsewhere -- worse,
-		// restoring it verbatim leaves a stale lock directory that makes
+		// "M<pid>.lck" file) next to any .vmx or .vmdk currently open.
+		// srcDir here is the staged copy made by copyDir from the live
+		// bundle while the VM was still running, mid-copy (see Run's doc
+		// comment) and before the snapshot merge -- so a lock directory
+		// can still be present in this staged copy even though tarTo
+		// itself only ever walks it afterward, on the static, already-
+		// copied bundle. That lock state is process-specific and
+		// meaningless once copied elsewhere -- worse, restoring it
+		// verbatim leaves a stale lock directory that makes
 		// vmware-vdiskmanager -e mistake the restored copy for one another
 		// process already has open, failing the post-extraction disk
 		// consistency check over nothing (confirmed real case, 2026-09-11).
 		// Skip it entirely rather than archive dead weight that actively
 		// breaks restore.
-		if d.IsDir() && strings.HasSuffix(d.Name(), ".lck") {
+		if d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".lck") {
 			return fs.SkipDir
 		}
 

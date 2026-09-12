@@ -145,6 +145,44 @@ func TestExtractArchive_PathTraversalEntry_IsRejected(t *testing.T) {
 	_ = bytes.NewReader // keep bytes imported for future assertions in this file
 }
 
+func TestExtractArchive_PathTraversalEntryEndingInLck_IsStillRejected(t *testing.T) {
+	// A traversal entry that happens to end in ".lck" must still be
+	// rejected by the traversal guard, not silently dropped by the
+	// Fusion-lock-directory skip (the two checks must not race).
+	archivePath := filepath.Join(t.TempDir(), "malicious.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	content := []byte("pwned")
+	if err := tw.WriteHeader(&tar.Header{Name: "../escape.lck", Size: int64(len(content)), Mode: 0o644, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write tar content: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destParent := t.TempDir()
+	destDir := filepath.Join(destParent, "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err == nil {
+		t.Fatal("extractArchive() error = nil, want a path-traversal rejection")
+	}
+	if _, err := os.Stat(filepath.Join(destParent, "escape.lck")); !os.IsNotExist(err) {
+		t.Errorf("escape.lck exists outside destDir, want it never written")
+	}
+}
+
 func TestExtractArchive_RegularFileSetuidBit_IsMaskedOnExtraction(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "setuid.tar.gz")
 	f, err := os.Create(archivePath)
@@ -233,6 +271,46 @@ func TestExtractArchive_ExcludesFusionLockDirectories(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(destDir, "disk.vmdk.lck")); !os.IsNotExist(err) {
 		t.Errorf("disk.vmdk.lck exists (err=%v), want it excluded from extraction", err)
+	}
+}
+
+func TestExtractArchive_PlainFileEndingInLck_IsNotExcluded(t *testing.T) {
+	// A regular file that isn't a Fusion lock directory (or nested under
+	// one) but merely has a name ending in ".lck" is something
+	// createArchive would include -- extraction must not drop it just
+	// because of the suffix, matching createArchive's directory-only
+	// exclusion.
+	archivePath := filepath.Join(t.TempDir(), "with-lck-file.tar.gz")
+	f, err := os.Create(archivePath)
+	if err != nil {
+		t.Fatalf("create archive: %v", err)
+	}
+	gz := gzip.NewWriter(f)
+	tw := tar.NewWriter(gz)
+	content := []byte("not a lock directory")
+	if err := tw.WriteHeader(&tar.Header{Name: "notes.lck", Size: int64(len(content)), Mode: 0o644, Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := tw.Write(content); err != nil {
+		t.Fatalf("write tar content: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar writer: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatalf("close archive file: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", nil); err != nil {
+		t.Fatalf("extractArchive() error = %v, want nil", err)
+	}
+	got, err := os.ReadFile(filepath.Join(destDir, "notes.lck"))
+	if err != nil || string(got) != "not a lock directory" {
+		t.Errorf("notes.lck = %q, %v, want %q, nil", got, err, "not a lock directory")
 	}
 }
 
