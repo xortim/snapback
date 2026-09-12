@@ -46,6 +46,14 @@ func (r *Result) Summary() string {
 	return fmt.Sprintf("backup complete: %s", r.ArchivePath)
 }
 
+// NextSteps implements internal/tui's pipelineResult interface. A completed
+// backup needs no follow-up action from the operator, unlike a completed
+// restore (see RestoreResult.NextSteps) -- empty means the rendering layer
+// prints nothing.
+func (r *Result) NextSteps() string {
+	return ""
+}
+
 // checkDisksConsistent runs ctrl.CheckDiskConsistency against every disk
 // in diskFiles (as returned by readDiskFiles, resolved against bundleDir
 // unless a diskFile is itself already absolute -- Fusion permits a disk

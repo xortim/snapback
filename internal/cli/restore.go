@@ -170,6 +170,9 @@ func restoreArchive(cmd *cobra.Command, deps restoreDeps, archiveID, vmName stri
 		return err
 	}
 
-	_, _ = fmt.Fprintf(out, "restore complete: %s\n", result.TargetPath)
+	_, _ = fmt.Fprintf(out, "%s\n", result.Summary())
+	if next := result.NextSteps(); next != "" {
+		_, _ = fmt.Fprintf(out, "%s\n", next)
+	}
 	return nil
 }

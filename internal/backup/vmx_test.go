@@ -137,6 +137,46 @@ func TestReadDiskFiles_MissingFileReturnsError(t *testing.T) {
 	}
 }
 
+func TestSetVMXKey_AppendsWhenKeyAbsent(t *testing.T) {
+	path := writeTempVMX(t, "guestOS = \"ubuntu-64\"\n")
+
+	if err := setVMXKey(path, "uuid.action", "create"); err != nil {
+		t.Fatalf("setVMXKey() error = %v, want nil", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read vmx: %v", err)
+	}
+	want := "guestOS = \"ubuntu-64\"\nuuid.action = \"create\"\n"
+	if string(got) != want {
+		t.Errorf("vmx contents = %q, want %q", got, want)
+	}
+}
+
+func TestSetVMXKey_ReplacesExistingKey(t *testing.T) {
+	path := writeTempVMX(t, "guestOS = \"ubuntu-64\"\nuuid.action = \"keep\"\ndisplayName = \"dev\"\n")
+
+	if err := setVMXKey(path, "uuid.action", "create"); err != nil {
+		t.Fatalf("setVMXKey() error = %v, want nil", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read vmx: %v", err)
+	}
+	want := "guestOS = \"ubuntu-64\"\nuuid.action = \"create\"\ndisplayName = \"dev\"\n"
+	if string(got) != want {
+		t.Errorf("vmx contents = %q, want %q", got, want)
+	}
+}
+
+func TestSetVMXKey_MissingFileReturnsError(t *testing.T) {
+	if err := setVMXKey(filepath.Join(t.TempDir(), "missing.vmx"), "uuid.action", "create"); err == nil {
+		t.Fatal("setVMXKey() error = nil, want an error for a missing file")
+	}
+}
+
 func writeTempVMX(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "example.vmx")

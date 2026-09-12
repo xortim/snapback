@@ -38,6 +38,9 @@ func (m Model) View() string {
 		switch {
 		case m.err == nil && m.result != nil:
 			b.WriteString(style.Done.Render(m.result.Summary()) + "\n")
+			if next := m.result.NextSteps(); next != "" {
+				b.WriteString(style.Hint.Render(next) + "\n")
+			}
 		case m.err == nil:
 			b.WriteString(style.Done.Render("complete") + "\n")
 		case !slices.ContainsFunc(m.rows, func(r stageRow) bool { return r.status == failed }):

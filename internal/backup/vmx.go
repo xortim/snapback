@@ -82,6 +82,48 @@ var diskDeviceKey = regexp.MustCompile(`^(scsi|sata|nvme|ide)\d+:\d+\.fileName$`
 // anymore. Two passes over the file's keys are needed here (unlike
 // readGuestOS) because the "present" key can appear before or after its
 // sibling "fileName" key.
+// setVMXKey sets key = "value" in the .vmx file at vmxPath, replacing an
+// existing line for key (matched the same way scanVMXKeys parses lines,
+// case-sensitively) if present, or appending a new line if not. Every other
+// line, including comments and formatting, is left untouched.
+func setVMXKey(vmxPath, key, value string) error {
+	data, err := os.ReadFile(vmxPath)
+	if err != nil {
+		return fmt.Errorf("read vmx: %w", err)
+	}
+	info, err := os.Stat(vmxPath)
+	if err != nil {
+		return fmt.Errorf("stat vmx: %w", err)
+	}
+
+	lines := strings.Split(string(data), "\n")
+	newLine := fmt.Sprintf("%s = %q", key, value)
+	found := false
+	for i, line := range lines {
+		k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && strings.TrimSpace(k) == key {
+			lines[i] = newLine
+			found = true
+			break
+		}
+	}
+	if !found {
+		// A file ending in a newline splits into a trailing "" element;
+		// insert before it so the new key doesn't end up on its own line
+		// after a stray blank line.
+		if n := len(lines); n > 0 && lines[n-1] == "" {
+			lines = append(lines[:n-1], newLine, "")
+		} else {
+			lines = append(lines, newLine)
+		}
+	}
+
+	if err := os.WriteFile(vmxPath, []byte(strings.Join(lines, "\n")), info.Mode()); err != nil {
+		return fmt.Errorf("write vmx: %w", err)
+	}
+	return nil
+}
+
 func readDiskFiles(vmxPath string) ([]string, error) {
 	kv := make(map[string]string)
 	var deviceKeys []string

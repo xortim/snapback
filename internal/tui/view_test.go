@@ -58,6 +58,27 @@ func TestView_Success_ShowsArchivePath(t *testing.T) {
 	}
 }
 
+// TestView_Success_RestoreResult_ShowsNextSteps covers view.go's rendering
+// of pipelineResult.NextSteps() below Summary() -- *backup.RestoreResult
+// has one (open the bundle to register it with Fusion), unlike
+// *backup.Result, whose empty NextSteps() prints nothing (see
+// TestView_Success_ShowsArchivePath, which asserts the opposite for a
+// backup).
+func TestView_Success_RestoreResult_ShowsNextSteps(t *testing.T) {
+	m := newModel("snapback restore myvm-x", func() {}, nil, nil)
+	result := &backup.RestoreResult{TargetPath: "/vms/myvm - backup 2026-09-11.vmwarevm"}
+	updated, _ := m.Update(resultMsg{result: result})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, result.Summary()) {
+		t.Errorf("view = %q, want the restore summary line", view)
+	}
+	if !strings.Contains(view, result.NextSteps()) {
+		t.Errorf("view = %q, want the restore's next-steps hint", view)
+	}
+}
+
 // TestView_Success_NilResult_DoesNotPanic covers a backupFn returning
 // (nil, nil) -- a valid Go zero-value combination the compiler doesn't
 // prevent, and not something backup.Run itself does today, but Model and
