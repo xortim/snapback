@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
 )
 
@@ -45,6 +46,8 @@ func fakeVMDeps(cfg *config.Config, candidates []discoveredVM, added []config.VM
 		addVMs: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) ([]config.VM, error) {
 			return added, nil
 		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
 	}
 }
 
@@ -310,6 +313,8 @@ func TestVMRemoveCmd_RemovesNamedVMAndWrites(t *testing.T) {
 			written = data
 			return nil
 		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
 	}
 	root := newTestRootForVM(t, deps)
 	root.SetArgs([]string{"vm", "remove", "remove-me", "--config", "/cfg/config.yaml"})
@@ -350,5 +355,61 @@ func TestVMRemoveCmd_RequiresExactlyOneArg(t *testing.T) {
 		if err := root.Execute(); err == nil {
 			t.Errorf("Execute() with args %v error = nil, want an error for the wrong number of positional args", args)
 		}
+	}
+}
+
+func TestVMAddCmd_SyncsLaunchdScheduleForAddedVM(t *testing.T) {
+	added := []config.VM{{Name: "new-vm", VMX: "/vms/new-vm.vmx", Schedule: "daily"}}
+	deps := vmDeps{
+		loadConfig:  func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },
+		marshal:     config.Marshal,
+		searchDirs:  func() []string { return nil },
+		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
+		writeFile:   func(string, []byte) error { return nil },
+		isTerminal:  func(io.Writer) bool { return false },
+		addVMs: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate) ([]config.VM, error) {
+			return added, nil
+		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "add", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "installed: new-vm") {
+		t.Errorf("stdout = %q, want \"installed: new-vm\" from the auto-sync", out.String())
+	}
+}
+
+func TestVMRemoveCmd_SyncsLaunchdScheduleAfterRemoval(t *testing.T) {
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: "/dest",
+				VMs:         []config.VM{{Name: "remove-me", VMX: "/vms/remove.vmx", Schedule: "daily"}},
+			}, nil
+		},
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "remove", "remove-me", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "nothing to do") {
+		t.Errorf("stdout = %q, want \"nothing to do\" -- the removed VM was never bootstrapped by this fake installer, so there's nothing to boot out", out.String())
 	}
 }

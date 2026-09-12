@@ -33,7 +33,7 @@ Vimalin does this well but it's shareware, GUI-only, and opaque about what it's 
 | ----------------- | --------------------------------------------------------------------- | --------------------------------------------------------------- |
 | `snapback` binary | Backup/restore choreography, config parsing, status reporting         | Go, [cobra](https://github.com/spf13/cobra) (commands), [koanf](https://github.com/knadh/koanf) (config) |
 | VM control        | Snapshot, list, delete — no structured API exists for this; see below | `vmcli` (Fusion 13+, confirmed as primary) or `vmrun` (fallback) |
-| launchd           | Scheduled execution                                                   | `~/Library/LaunchAgents/com.tim.snapback.plist`                 |
+| launchd           | Scheduled execution — one LaunchAgent per scheduled VM                | `~/Library/LaunchAgents/com.tim.snapback.<vm-name>.plist`       |
 | xbar plugin       | Menu bar status + manual trigger                                      | Shell script wrapping `snapback status --xbar`                  |
 | Config            | VM list, destination, retention, schedule                             | YAML at `~/.config/snapback/config.yaml`                        |
 | Backup archive    | Compressed, checksummed VM snapshots                                  | tar + zstd (or gzip if zstd isn't installed) + SHA-256 manifest |
@@ -93,7 +93,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | ------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `snapback init [--search-dir <dir>]` | Interactive config bootstrap — discovers VMs by scanning `~/Virtual Machines` and `~/Virtual Machines.localized` for `.vmwarevm` bundles, plus any `--search-dir` given (repeatable), prompts for destination/retention (falls back to manual entry if none are found) |
 | `snapback run --vm <name>`      | On-demand backup of one VM                                                                       |
-| `snapback run --all`            | Backup every VM in config (used by launchd)                                                      |
+| `snapback run --all`            | Backup every VM in config. Not implemented, and no longer needed for scheduling — ADR-005's one-plist-per-VM model has launchd fire each VM's `run --vm` independently |
 | `snapback list`                 | List backup archives with timestamp, size                                                        |
 | `snapback restore <archive-id>` / `snapback restore --vm <name> --latest [--dest <dir>]` | Restore to a new `.vmwarevm`, suffixed `- backup yyyy-mm-dd`, never overwrites source; `--vm`/`--latest` resolves the newest archive for a configured VM instead of naming an archive-id directly, and `--dest <dir>` overrides the inferred target parent directory |
 | `snapback status`               | Human-readable status: last run, next scheduled run, disk usage                                  |
@@ -103,6 +103,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback cleanup --vm <name>`  | Find and remove any `snapback-<timestamp>` snapshot orphaned by a `run` that died mid-choreography |
 | `snapback vm add [--search-dir <dir>]` | Discover and add new VMs to an existing config, without re-running the rest of `init`       |
 | `snapback vm remove <name>`     | Remove a VM from config.yaml (does not touch the VM itself or its existing archives)              |
+| `snapback schedule sync`        | Reconcile every configured VM's LaunchAgent with its `schedule` field — install, update, or bootout+delete as needed. Idempotent; `init`/`vm add`/`vm remove` run the same reconciliation automatically, so this is mainly for recovering after a hand-edited config. See [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) |
 
 ## Config Reference
 
@@ -117,13 +118,15 @@ retention:
 vms:
   - name: dev-ubuntu
     vmx: ~/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
-    schedule: "0 2 * * *" # daily 2am, cron syntax, translated to launchd StartCalendarInterval
+    schedule: daily # "" (unscheduled) | daily | weekly | monthly — see ADR-005
   - name: win-testbed
     vmx: ~/Virtual Machines/win-testbed.vmwarevm/win-testbed.vmx
-    schedule: "0 2 * * 0" # weekly Sunday 2am
+    schedule: weekly # Sunday, midnight
 notifications:
   enabled: true
 ```
+
+`schedule` is a closed enum, not cron syntax — `""`/omitted (unscheduled), `daily` (midnight), `weekly` (Sunday midnight), or `monthly` (1st, midnight), mirroring cron's own `@daily`/`@weekly`/`@monthly` meta-schedules. `config.Load` rejects anything else. It was originally documented here as free-form cron; nothing had ever consumed the field, so [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) narrowed it when launchd scheduling landed, which removes an entire class of cron-to-`StartCalendarInterval` translation bugs at the cost of no configurable time-of-day.
 
 ## xbar Plugin Output Format
 
@@ -171,8 +174,8 @@ xbar/SwiftBar gets you 90% of the value — a menu bar icon, a dropdown, click-t
 ## Roadmap
 
 - [x] **Phase 1 — Core CLI:** `vmcli` chosen and confirmed as the backing tool, the `VMController` interface (fake + real `vmcli`-backed implementations), and the full backup choreography engine (snapshot → sync → copy → merge → archive → checksum), wired end-to-end to `init` (interactive `huh` wizard), `run --vm`, `list`, `status` / `status --vm`, and `cleanup` (orphaned-snapshot removal). Bonus scope beyond the original phase 1 text: the optional TUI layer (checklist/progress UI for `run`, wizard for `init`, card drill-down for `status --vm`) and `vm add`/`vm remove` for editing an existing config without re-running the wizard. Epic #1 closed.
-- [ ] **Phase 2 — Scheduling:** launchd plist generation from each VM's config `schedule` field, `snapback run --all`, and macOS native notifications (osascript) on success/failure — none of this exists yet (`progress.Notifying` is a stage enum nothing fires). Deliberately deferred behind Phase 3 (Restore, below): backups only matter if they can be restored, and that hasn't been proven yet either — running `run` by hand is a tolerable stopgap in the meantime, an unverified restore path isn't.
-- [x] **Phase 3 — Restore:** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore. Pulled ahead of Phase 2 for the reason above -- shipped in this branch.
+- [x] **Phase 2 — Scheduling:** shipped, scoped down to launchd scheduling alone by [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) — `internal/launchd` generates one LaunchAgent per scheduled VM (`com.tim.snapback.<sanitized-vm-name>.plist`) from the narrowed `daily`/`weekly`/`monthly` `schedule` enum, drives it with `launchctl bootstrap`/`bootout` against the `gui/<uid>` domain, and reconciles config against installed state via `snapback schedule sync` — also called automatically by `init`, `vm add`, and `vm remove`. Scheduled runs write to `~/Library/Logs/snapback/<vm>.log` with built-in size-based rotation (no `sudo`, no `newsyslog.d`). The original Phase 2 text bundled two other things in: osascript success/failure notifications are split out to [#86](https://github.com/xortim/snapback/issues/86) (`progress.Notifying` is still a stage nothing fires), and `run --all` was dropped as unnecessary — one plist per VM means launchd invokes each `run --vm` independently. Follow-ups still open: [#85](https://github.com/xortim/snapback/issues/85) (drift detection between config and what's actually installed/loaded). Deliberately sequenced behind Phase 3 (Restore, below): backups only matter if they can be restored, and running `run` by hand was a tolerable stopgap in the meantime where an unverified restore path wasn't.
+- [x] **Phase 3 — Restore:** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore. Pulled ahead of Phase 2 for the reason above -- shipped.
 - [ ] **Phase 4 — xbar plugin:** `status --xbar` output, plugin script, click-to-run wiring. Not started — `status.go`'s own help text says so today.
 - [ ] **Phase 5 — Retention:** the `retention` config (`keep_last`/`keep_daily`/`keep_weekly`) is parsed, validated, and displayed in `status --vm`, but nothing enforces it yet — no `prune` command exists.
 - [ ] **Phase 6 (stretch):** SMB/NFS destinations, encrypted VM support if VMware's automation API ever exposes the password flow cleanly.

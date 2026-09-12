@@ -42,6 +42,28 @@ answers its own "moved or copied" prompt with "I Copied It" the first
 time the bundle is opened, rather than asking (the only correct answer,
 since the untouched source keeps the original identity).
 
+Phase 2's scheduling half has since landed too, scoped down by ADR-005
+(`docs/superpowers/specs/2026-09-11-launchd-scheduling-design.md`) to
+launchd scheduling alone. `config.VM.Schedule` narrowed from free-form
+cron to a closed `""`/`daily`/`weekly`/`monthly` enum; `internal/launchd`
+builds one LaunchAgent per scheduled VM and drives it with `launchctl
+bootstrap`/`bootout` against the `gui/<uid>` domain, behind an
+`Installer` interface with a `FakeInstaller` — same fake-vs-real split as
+`vm.Controller`. `launchd.Sync` is the single reconciliation
+implementation, called from four places: `snapback schedule sync` (the
+explicit command, for recovering after a hand-edited config) and
+automatically as a side effect of `init`, `vm add`, and `vm remove`.
+Scheduled runs land in `~/Library/Logs/snapback/<sanitized-vm-name>.log`,
+rotated in-process by size (5MB, 3 generations) rather than via
+`newsyslog.d`, specifically to avoid this tool's first `sudo`. Two pieces
+the old Phase 2 bundled in did *not* ship: osascript notifications
+(split to #86, `progress.Notifying` still fires nothing) and `run --all`
+(unnecessary — one plist per VM means launchd invokes each `run --vm`
+independently). Open follow-up: #85, drift detection between
+`config.yaml` and what's actually installed *and loaded* — `Sync`
+classifies install-vs-update from disk contents only, so a plist that's
+on disk but not bootstrapped reads as "in sync".
+
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
 questions), not just a summary.
@@ -149,14 +171,15 @@ with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
 
 | Piece         | Role                                                                     |
 | ------------- | ------------------------------------------------------------------------- |
-| `launchd`     | Scheduling, via `~/Library/LaunchAgents/com.tim.snapback.plist`, generated from config `schedule` (cron syntax) fields |
+| `launchd`     | Scheduling — **one LaunchAgent per scheduled VM**, at `~/Library/LaunchAgents/com.tim.snapback.<sanitized-vm-name>.plist`, generated from that VM's `schedule` field. `schedule` is a closed enum (`""`/`daily`/`weekly`/`monthly`), **not** cron syntax — `config.Load` rejects anything else |
 | xbar plugin   | Shell script wrapping `snapback status --xbar`; text above `---` is the menu bar line, everything below is the dropdown |
 | Config        | YAML at `~/.config/snapback/config.yaml` — destination, compression, retention (keep_last/daily/weekly), per-VM name/vmx/schedule |
 
 Command surface (`docs/design.md#command-reference`): `init`, `run
 --vm <name>` / `run --all`, `list`, `restore <archive-id>` (never
 overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
-`status --xbar`, `prune`, `cleanup`, `vm add`, `vm remove <name>`.
+`status --xbar`, `prune`, `cleanup`, `vm add`, `vm remove <name>`,
+`schedule sync`.
 
 ## Known gotchas worth carrying into implementation
 

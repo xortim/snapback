@@ -382,11 +382,11 @@ func TestRunForm_Accessible_CtxAlreadyCanceled_ReturnsPromptlyWithoutReading(t *
 
 func TestPromptSchedules_DefaultIsNone(t *testing.T) {
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
-	// schedule select blank (default "none"), custom-cron blank (unused).
-	in := strings.NewReader("\n\n")
+	// schedule select blank (default "none").
+	in := strings.NewReader("\n")
 	var out bytes.Buffer
 
-	if err := promptSchedules(context.Background(), in, &out, true, vms); err != nil {
+	if err := promptSchedules(context.Background(), in, &out, true, vms, nil); err != nil {
 		t.Fatalf("promptSchedules() error = %v", err)
 	}
 	if vms[0].Schedule != "" {
@@ -394,35 +394,17 @@ func TestPromptSchedules_DefaultIsNone(t *testing.T) {
 	}
 }
 
-func TestPromptSchedules_Nightly(t *testing.T) {
+func TestPromptSchedules_Daily(t *testing.T) {
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
-	// "2" selects "nightly" (scheduleChoices[1]); custom-cron blank (unused).
-	in := strings.NewReader("2\n\n")
+	// "2" selects "daily" (scheduleChoices[1]).
+	in := strings.NewReader("2\n")
 	var out bytes.Buffer
 
-	if err := promptSchedules(context.Background(), in, &out, true, vms); err != nil {
+	if err := promptSchedules(context.Background(), in, &out, true, vms, nil); err != nil {
 		t.Fatalf("promptSchedules() error = %v", err)
 	}
-	if vms[0].Schedule != cronNightly {
-		t.Errorf("Schedule = %q, want %q", vms[0].Schedule, cronNightly)
-	}
-}
-
-func TestPromptSchedules_CustomCron_InvalidThenValid(t *testing.T) {
-	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
-	// "4" selects "custom" (scheduleChoices[3]); custom-cron: invalid
-	// (wrong field count) then a valid 5-field expression.
-	in := strings.NewReader("4\nbadcron\n0 3 * * 1\n")
-	var out bytes.Buffer
-
-	if err := promptSchedules(context.Background(), in, &out, true, vms); err != nil {
-		t.Fatalf("promptSchedules() error = %v", err)
-	}
-	if vms[0].Schedule != "0 3 * * 1" {
-		t.Errorf("Schedule = %q, want %q", vms[0].Schedule, "0 3 * * 1")
-	}
-	if !strings.Contains(out.String(), "5 space-separated fields") {
-		t.Errorf("output = %q, want a reprompt explaining the invalid cron expression", out.String())
+	if vms[0].Schedule != "daily" {
+		t.Errorf("Schedule = %q, want %q", vms[0].Schedule, "daily")
 	}
 }
 
@@ -431,21 +413,68 @@ func TestPromptSchedules_MultipleVMs_AskedInOrder(t *testing.T) {
 		{Name: "dev", VMX: "/vms/dev.vmx"},
 		{Name: "prod", VMX: "/vms/prod.vmx"},
 	}
-	// dev: blank (none), blank (unused). prod: "3" (weekly), blank (unused).
-	in := strings.NewReader("\n\n3\n\n")
+	// dev: blank (none). prod: "3" (weekly).
+	in := strings.NewReader("\n3\n")
 	var out bytes.Buffer
 
-	if err := promptSchedules(context.Background(), in, &out, true, vms); err != nil {
+	if err := promptSchedules(context.Background(), in, &out, true, vms, nil); err != nil {
 		t.Fatalf("promptSchedules() error = %v", err)
 	}
 	if vms[0].Schedule != "" {
 		t.Errorf("dev Schedule = %q, want empty", vms[0].Schedule)
 	}
-	if vms[1].Schedule != cronWeekly {
-		t.Errorf("prod Schedule = %q, want %q", vms[1].Schedule, cronWeekly)
+	if vms[1].Schedule != "weekly" {
+		t.Errorf("prod Schedule = %q, want %q", vms[1].Schedule, "weekly")
 	}
 	if !strings.Contains(out.String(), "Schedule for dev") || !strings.Contains(out.String(), "Schedule for prod") {
 		t.Errorf("output = %q, want both VM names named in their own prompt", out.String())
+	}
+}
+
+func TestPromptSchedules_PriorConfig_SeedsExistingScheduleAsDefault(t *testing.T) {
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
+	// Blank accepts whatever's pre-filled -- if prior weren't wired
+	// through, this blank would resolve to "none" instead.
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if vms[0].Schedule != "daily" {
+		t.Errorf("Schedule = %q, want %q (seeded from prior config)", vms[0].Schedule, "daily")
+	}
+}
+
+func TestPromptSchedules_PriorConfig_NoMatchingVMX_DefaultsToNone(t *testing.T) {
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev-renamed.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if vms[0].Schedule != "" {
+		t.Errorf("Schedule = %q, want empty -- no prior VM shares this VMX", vms[0].Schedule)
+	}
+}
+
+func TestPromptSchedules_PriorConfig_CanStillBeChangedExplicitly(t *testing.T) {
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
+	// "1" explicitly selects scheduleChoices[0] ("none") despite the
+	// seeded "daily" default -- the seed only changes what a blank
+	// answer accepts, not what's selectable.
+	in := strings.NewReader("1\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if vms[0].Schedule != "" {
+		t.Errorf("Schedule = %q, want empty -- explicit choice should override the seeded default", vms[0].Schedule)
 	}
 }
 
@@ -489,9 +518,9 @@ func TestRunInitWizard_EndToEnd_DiscoveredVMWithDefaults(t *testing.T) {
 	// VM select: "0" (confirm default selection), "n" (decline manual).
 	// Core settings: 6 blanks (destination/compression/keep_last/
 	// keep_daily/keep_weekly/notify), all defaults.
-	// Schedule (1 VM): 2 blanks (choice=none, custom=unused).
+	// Schedule (1 VM): 1 blank (choice=none).
 	// Review: blank (accept default "write? [Y/n]" = yes).
-	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n\n")
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n")
 	var out bytes.Buffer
 
 	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
@@ -509,6 +538,39 @@ func TestRunInitWizard_EndToEnd_DiscoveredVMWithDefaults(t *testing.T) {
 	}
 	if !cfg.Notifications.Enabled {
 		t.Error("cfg.Notifications.Enabled = false, want true (the default)")
+	}
+}
+
+func TestRunInitWizard_Force_PreservesExistingVMSchedule(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	prior := &config.Config{
+		Destination: defaultDestination,
+		Compression: defaultCompression,
+		Retention: config.Retention{
+			KeepLast:   defaultKeepLast,
+			KeepDaily:  defaultKeepDaily,
+			KeepWeekly: defaultKeepWeekly,
+		},
+		VMs:           []config.VM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx", Schedule: "daily"}},
+		Notifications: config.Notifications{Enabled: true},
+	}
+	// Same input sequence as TestRunInitWizard_EndToEnd_DiscoveredVMWithDefaults
+	// -- prior doesn't add or remove any prompts, it only changes what a
+	// blank answer resolves to.
+	// VM select: "0" (confirm default selection), "n" (decline manual).
+	// Core settings: 6 blanks, all defaults.
+	// Schedule (1 VM): blank -- must keep "daily" from prior, not reset
+	// to "none".
+	// Review: blank (accept default "write? [Y/n]" = yes).
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n")
+	var out bytes.Buffer
+
+	cfg, err := RunInitWizard(context.Background(), in, &out, true, candidates, prior)
+	if err != nil {
+		t.Fatalf("RunInitWizard() error = %v", err)
+	}
+	if len(cfg.VMs) != 1 || cfg.VMs[0].Schedule != "daily" {
+		t.Fatalf("cfg.VMs = %+v, want the existing VM's \"daily\" schedule preserved from prior", cfg.VMs)
 	}
 }
 
@@ -562,7 +624,7 @@ func TestSelectVMs_EmptyReader_ReturnsError(t *testing.T) {
 
 func TestRunInitWizard_DeclinedAtReview_ReturnsAbortedError(t *testing.T) {
 	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
-	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\nn\n")
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\nn\n")
 	var out bytes.Buffer
 
 	_, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
