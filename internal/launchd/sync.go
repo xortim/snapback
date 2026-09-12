@@ -32,6 +32,12 @@ func (r SyncResult) IsEmpty() bool {
 // snapback binary to invoke (os.Executable(), resolved by the caller) --
 // see ADR-005's Risks for the known gap if the binary is later moved
 // without a resync.
+//
+// If reconciliation fails partway through (an Installer call returns an
+// error after the collision check and Agent-building pass have already
+// succeeded), the returned SyncResult still reflects everything
+// completed before the failure -- it is not zeroed out -- so callers can
+// report partial progress to the user alongside the error.
 func Sync(installer Installer, vms []config.VM, binaryPath string) (SyncResult, error) {
 	if err := DetectCollisions(vms); err != nil {
 		return SyncResult{}, err
