@@ -34,7 +34,13 @@ archive by ID or by `--vm <name> --latest`, verifies its checksum,
 extracts it, confirms the restored disk chain is consistent, and places
 it as a new, non-destructively-named `.vmwarevm` bundle (never
 overwriting the source) — with `--dest <dir>` to override the inferred
-location.
+location. Restore never registers the bundle with Fusion or opens it —
+matching Vimalin's own restore behavior — so it prints a `NextSteps`
+hint pointing the operator at the placed path; it does write
+`uuid.action = "create"` into the restored `.vmx` so Fusion silently
+answers its own "moved or copied" prompt with "I Copied It" the first
+time the bundle is opened, rather than asking (the only correct answer,
+since the untouched source keeps the original identity).
 
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
@@ -179,3 +185,16 @@ overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
   running. Recovery, if this happens again: `vmware-vdiskmanager -R
   <disk>.vmdk` repaired both the live VM and a copy of the archived one
   in this incident, cleanly, with no data loss.
+- **Confirmed real incident (2026-09-11):** restoring a real archive
+  failed its post-extraction disk consistency check ("Disk chain is not
+  consistent: The specified directory is not empty (0x4e26)"). Root
+  cause: Fusion creates a `<file>.lck` directory (holding a per-process
+  `M<pid>.lck` file) next to any `.vmx`/`.vmdk` currently open, and the
+  backup choreography's copy step reads the live bundle while the VM is
+  still running — those lock directories were always present at copy
+  time and got swept into the archive; restoring reproduced them
+  verbatim, and `vmware-vdiskmanager -e` mistook the stale, restored
+  lock directory for one another process already had the disk open
+  under. `createArchive` now skips any `*.lck` directory when taring the
+  staged bundle, and `extractArchive` also drops any `*.lck` tar entry
+  so archives already created with the bug still restore cleanly.
