@@ -150,7 +150,7 @@ func tarTo(srcDir string, w io.Writer, onRead func(cumulativeBytes int64)) error
 		// consistency check over nothing (confirmed real case, 2026-09-11).
 		// Skip it entirely rather than archive dead weight that actively
 		// breaks restore.
-		if d.IsDir() && strings.HasSuffix(strings.ToLower(d.Name()), ".lck") {
+		if d.IsDir() && isLockDirName(d.Name()) {
 			return fs.SkipDir
 		}
 
@@ -206,4 +206,12 @@ func tarTo(srcDir string, w io.Writer, onRead func(cumulativeBytes int64)) error
 		return walkErr
 	}
 	return closeErr
+}
+
+// isLockDirName reports whether name is a Fusion lock directory name
+// ("<file>.lck"), per the suffix convention shared by tarTo (exclusion at
+// archive time) and hasLockDirComponent in extract.go (exclusion at
+// restore time, for archives made before that exclusion existed).
+func isLockDirName(name string) bool {
+	return strings.HasSuffix(strings.ToLower(name), ".lck")
 }

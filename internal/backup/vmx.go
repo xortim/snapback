@@ -63,25 +63,6 @@ func readGuestOS(vmxPath string) (string, error) {
 // readDiskFiles below also requires the value to end in ".vmdk".
 var diskDeviceKey = regexp.MustCompile(`^(scsi|sata|nvme|ide)\d+:\d+\.fileName$`)
 
-// readDiskFiles returns the fileName value of every *connected* virtual
-// disk device configured in vmxPath -- e.g. ["Virtual Disk.vmdk"] for a
-// single-disk VM -- in the order encountered. Each is the *top* of that
-// disk's snapshot chain (the file the device currently points at, not
-// necessarily the base disk), which is exactly what
-// vm.Controller.CheckDiskConsistency needs: checking the top validates
-// every parent underneath it too. A device whose fileName isn't a
-// ".vmdk" (a CD-ROM/DVD's .iso, or the "-1" empty-drive placeholder) is
-// not a virtual disk and is skipped.
-//
-// A device's sibling "<bus><n>:<n>.present" key is also consulted: when
-// present and "FALSE" (case-insensitive), the device is disconnected and
-// its fileName is skipped even if it still ends in ".vmdk". Fusion can
-// leave a stale fileName behind after a disk is removed via the UI, and
-// checking a disconnected disk that no longer exists would otherwise fail
-// the whole backup over a device that isn't actually part of the VM
-// anymore. Two passes over the file's keys are needed here (unlike
-// readGuestOS) because the "present" key can appear before or after its
-// sibling "fileName" key.
 // setVMXKey sets key = "value" in the .vmx file at vmxPath, replacing an
 // existing line for key (matched the same way scanVMXKeys parses lines,
 // case-sensitively) if present, or appending a new line if not. Every other
@@ -102,7 +83,14 @@ func setVMXKey(vmxPath, key, value string) error {
 	for i, line := range lines {
 		k, _, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok && strings.TrimSpace(k) == key {
-			lines[i] = newLine
+			// Preserve the replaced line's own CRLF-vs-LF ending so a
+			// CRLF-encoded .vmx doesn't end up with one lone LF line
+			// among otherwise-CRLF ones.
+			if strings.HasSuffix(line, "\r") {
+				lines[i] = newLine + "\r"
+			} else {
+				lines[i] = newLine
+			}
 			found = true
 			break
 		}
@@ -124,6 +112,25 @@ func setVMXKey(vmxPath, key, value string) error {
 	return nil
 }
 
+// readDiskFiles returns the fileName value of every *connected* virtual
+// disk device configured in vmxPath -- e.g. ["Virtual Disk.vmdk"] for a
+// single-disk VM -- in the order encountered. Each is the *top* of that
+// disk's snapshot chain (the file the device currently points at, not
+// necessarily the base disk), which is exactly what
+// vm.Controller.CheckDiskConsistency needs: checking the top validates
+// every parent underneath it too. A device whose fileName isn't a
+// ".vmdk" (a CD-ROM/DVD's .iso, or the "-1" empty-drive placeholder) is
+// not a virtual disk and is skipped.
+//
+// A device's sibling "<bus><n>:<n>.present" key is also consulted: when
+// present and "FALSE" (case-insensitive), the device is disconnected and
+// its fileName is skipped even if it still ends in ".vmdk". Fusion can
+// leave a stale fileName behind after a disk is removed via the UI, and
+// checking a disconnected disk that no longer exists would otherwise fail
+// the whole backup over a device that isn't actually part of the VM
+// anymore. Two passes over the file's keys are needed here (unlike
+// readGuestOS) because the "present" key can appear before or after its
+// sibling "fileName" key.
 func readDiskFiles(vmxPath string) ([]string, error) {
 	kv := make(map[string]string)
 	var deviceKeys []string

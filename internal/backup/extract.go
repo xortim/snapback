@@ -188,7 +188,7 @@ func hasLockDirComponent(hdr *tar.Header) bool {
 		if isEntryItself && hdr.Typeflag != tar.TypeDir {
 			continue
 		}
-		if strings.HasSuffix(strings.ToLower(part), ".lck") {
+		if isLockDirName(part) {
 			return true
 		}
 	}
