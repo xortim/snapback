@@ -1,8 +1,12 @@
 # ADR-005: launchd Scheduling — Unattended Backups via LaunchAgents
 
-**Status:** Proposed
+**Status:** Implemented (branch `feat/launchd-scheduling-design`)
 **Date:** 2026-09-11
 **Deciders:** Tim
+
+Implementation notes are inline below where the shipped code refined this
+design; `internal/launchd` is authoritative for anything the two disagree
+on. Plan: `docs/superpowers/plans/2026-09-11-launchd-scheduling.md`.
 
 ## Scope
 
@@ -171,29 +175,62 @@ package launchd
 
 // Agent describes one VM's scheduled backup job.
 type Agent struct {
+    Label        string // com.tim.snapback.<sanitized-vm-name>
     VMName       string // config.VM.Name, pre-sanitization
-    Schedule     string // "daily" | "weekly" | "monthly" ("" is never passed in)
     BinaryPath   string // path to the running snapback binary (os.Executable())
     LogPath      string // ~/Library/Logs/snapback/<sanitized>.log
+    Interval     []calendarKey // the schedule, already resolved to plist keys
 }
 
 // Installer is the shell-out boundary, mirroring vm.Controller's shape:
 // choreography-level code (Sync, below) is written and tested against
 // FakeInstaller, never against the real launchctl-backed one directly.
 type Installer interface {
-    Write(agent Agent) (plistPath string, err error)   // renders + writes the plist file
-    Bootstrap(plistPath string) error                   // launchctl bootstrap gui/<uid> <plistPath>
-    Bootout(label string) error                         // launchctl bootout gui/<uid>/<label>
-    Remove(plistPath string) error                       // os.Remove, tolerating already-gone
+    Write(agent Agent) (plistPath string, changed bool, err error) // renders + writes the plist file
+    Bootstrap(plistPath string) error                              // launchctl bootstrap gui/<uid> <plistPath>
+    Bootout(label string) error                                    // launchctl bootout gui/<uid>/<label>
+    Remove(label string) error                                     // deletes the plist, tolerating already-gone
+    List() ([]string, error)                                       // labels of every com.tim.snapback.* plist on disk
 }
 
-// LaunchctlInstaller is the real implementation (internal/launchd/launchctl.go).
-type LaunchctlInstaller struct{}
+// LaunchctlInstaller is the real implementation (internal/launchd/installer.go).
+type LaunchctlInstaller struct{ Dir string } // Dir is settable so integration tests use a scratch dir
 
 // FakeInstaller backs unit tests (internal/launchd/fake.go), recording
 // calls in memory — same role vm.FakeVMController plays for internal/backup.
 type FakeInstaller struct{ /* ... */ }
 ```
+
+**Refined during implementation** — the sketch above is the shipped
+shape; `internal/launchd/installer.go` and `plist.go` are authoritative.
+Three deltas from this ADR's original draft, all found while writing
+`Sync`:
+
+- `Installer` gained a fifth method, `List()`, because `Sync` needs to
+  discover plists for VMs no longer in the config at all (there's no
+  `Agent` to ask about them). This is also the source of the known
+  disk-vs-loaded limitation noted in Risks below.
+- `Write` returns a `changed bool` so `Sync` can distinguish "wrote a
+  new plist" from "content was already identical" and skip a pointless
+  bootout/bootstrap cycle. `Remove` takes a `label`, not a `plistPath`,
+  so the installer owns path construction on both ends.
+- `Agent` carries the already-resolved `Label` and `Interval` rather than
+  the raw `Schedule` string; `buildAgent(config.VM, binaryPath)` does the
+  sanitization and `calendarInterval` lookup once, so `renderPlist` never
+  re-parses a schedule.
+
+Also shipped beyond the sketch: the generated plist sets
+`EnvironmentVariables.PATH` to
+`/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin`.
+launchd's default agent PATH excludes both Homebrew prefixes, and
+`internal/backup/archive.go` resolves `zstd` via `exec.LookPath` with a
+*silent* gzip fallback — without this, a Homebrew-zstd user would get
+zstd archives from a manual `run` and gzip from the identical scheduled
+one. And `Sync` boots out before bootstrapping on the install path too,
+not just the update path: `List()` only sees disk, so a job whose plist
+was hand-deleted is still loaded, and `Bootstrap` fails against an
+already-loaded label. `Bootout` is idempotent for an unloaded label, so
+the extra call costs nothing on the normal path.
 
 `Sync(installer Installer, vms []config.VM) (SyncResult, error)` is the
 package's one piece of choreography: for each VM with a non-empty
@@ -316,6 +353,20 @@ introduce the first exception.
   into one event upon wake") means a laptop asleep through its scheduled
   time gets exactly one catch-up run on wake, not zero and not multiple
   — worth knowing, not a defect to design around.
+- **`Sync` reads disk, not launchd's loaded state** (found during
+  implementation). `Installer.List()` globs
+  `~/Library/LaunchAgents/com.tim.snapback.*.plist`, so a plist that
+  exists on disk with correct content but *isn't* actually bootstrapped
+  — after an interrupted sync, or a manual `launchctl bootout` — reads
+  as "already in sync" indefinitely, and that VM silently stops backing
+  up until the next config change forces a rewrite. The opposite
+  direction is handled: `Sync` boots out before bootstrapping on both
+  the install and update paths, so a loaded job with no plist on disk
+  can't make `Bootstrap` fail. Closing the first direction needs a
+  `launchctl print`-backed loaded-state check on the `Installer`
+  interface; folded into
+  [#85](https://github.com/xortim/snapback/issues/85)'s drift-detection
+  scope rather than solved here.
 - **Sanitization ([#84](https://github.com/xortim/snapback/issues/84))
   is a hard dependency**, not a nice-to-have: without collision
   detection, two VMs whose names sanitize to the same label would
