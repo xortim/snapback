@@ -117,3 +117,30 @@ func TestValidateVMs_AcceptsDistinctNames(t *testing.T) {
 		t.Errorf("ValidateVMs() = %v, want nil", err)
 	}
 }
+
+func TestValidate_RejectsUnknownSchedule(t *testing.T) {
+	cfg := validConfig()
+	cfg.VMs[0].Schedule = "0 2 * * *"
+	err := config.Validate(cfg)
+	if err == nil || !strings.Contains(err.Error(), "schedule") || !strings.Contains(err.Error(), "0 2 * * *") {
+		t.Errorf("Validate() = %v, want an error naming the bad schedule value", err)
+	}
+}
+
+func TestValidate_AcceptsEveryScheduleEnumValue(t *testing.T) {
+	for _, sched := range []string{"", "daily", "weekly", "monthly"} {
+		cfg := validConfig()
+		cfg.VMs[0].Schedule = sched
+		if err := config.Validate(cfg); err != nil {
+			t.Errorf("Validate() with schedule %q = %v, want nil", sched, err)
+		}
+	}
+}
+
+func TestValidateVMs_RejectsUnknownSchedule(t *testing.T) {
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "nightly"}}
+	err := config.ValidateVMs(vms)
+	if err == nil || !strings.Contains(err.Error(), "schedule") {
+		t.Errorf("ValidateVMs() = %v, want an error naming the bad schedule value", err)
+	}
+}

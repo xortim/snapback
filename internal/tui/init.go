@@ -296,14 +296,69 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 }
 
 // promptSchedules asks a schedule preset for each VM in vms, in order,
-// mutating vms[i].Schedule in place. The custom-cron question is always
-// asked (see resolveSchedule's doc comment for why), gated only by its
-// own Validate closure checking the choice already made in the same
-// VM's prior group.
-func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM) error {
+// mutating vms[i].Schedule in place. When prior is non-nil (an existing
+// config.yaml found under `init --force`, per #52), each VM's starting
+// choice is seeded from the matching prior VM's existing Schedule --
+// matched by VMX, the one field guaranteed unique per bundle (see
+// selectVMs) -- instead of always starting at "none". Without this,
+// init --force silently proposed erasing every VM's schedule on each
+// rerun; now that runInit auto-syncs LaunchAgents right after writing
+// config (internal/cli/init.go), that would go on to actually delete
+// working scheduled backups, not just reset a config field. A VM with
+// no match in prior (renamed, or newly selected this run) still starts
+// at "none", same as a fresh init.
+//
+// If a prior VM matched by Name but not VMX (e.g. a bundle moved
+// between search directories with its folder name unchanged), the prior
+// schedule is still seeded here (via the name fallback) instead of
+// silently defaulting to "none", which would then be auto-synced away
+// by internal/cli/init.go's post-write LaunchAgent sync. This ensures a
+// moved bundle keeps its schedule.
+//
+// If a prior VM's schedule was non-empty but matched neither Name nor
+// VMX (a true rename, or removal from this run's search), that's
+// reported by warnUnmatchedPriorSchedules, which prints a warning
+// naming the unmatched VM so the user notices instead of the schedule
+// silently vanishing.
+func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM, prior *config.Config) error {
+	priorByVMX := make(map[string]string, len(vms))
+	priorByName := make(map[string]string, len(vms))
+	if prior != nil {
+		for _, p := range prior.VMs {
+			priorByVMX[p.VMX] = p.Schedule
+			priorByName[p.Name] = p.Schedule
+		}
+
+		// Built once here and passed to warnUnmatchedPriorSchedules below,
+		// rather than that function rebuilding its own copy from vms --
+		// one source of truth for "is this VMX/Name present this run",
+		// so the seeding loop below and the warning can't silently
+		// disagree about what counts as a match if the matching rule
+		// ever changes.
+		presentVMX := make(map[string]bool, len(vms))
+		presentName := make(map[string]bool, len(vms))
+		for _, v := range vms {
+			presentVMX[v.VMX] = true
+			presentName[v.Name] = true
+		}
+		if err := warnUnmatchedPriorSchedules(out, prior.VMs, presentVMX, presentName); err != nil {
+			return err
+		}
+	}
+
 	for i := range vms {
 		choice := scheduleChoiceNone
-		var custom string
+		if schedule, ok := priorByVMX[vms[i].VMX]; ok {
+			choice = scheduleChoiceFor(schedule)
+		} else if schedule, ok := priorByName[vms[i].Name]; ok {
+			// VMX changed but the bundle's folder name (and thus Name,
+			// per discoverVMs) didn't -- a bundle moved between search
+			// directories, not renamed. Falls back here rather than
+			// defaulting to "none" and letting the mandatory post-write
+			// auto-sync (internal/cli/init.go) delete a real,
+			// still-correct LaunchAgent.
+			choice = scheduleChoiceFor(schedule)
+		}
 
 		err := runForm(ctx, in, out, accessible,
 			huh.NewGroup(
@@ -312,24 +367,43 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 					Options(huh.NewOptions(scheduleChoices...)...).
 					Value(&choice),
 			),
-			huh.NewGroup(
-				huh.NewInput().
-					Title("Custom cron expression (only used if 'custom' was chosen above)").
-					Validate(func(s string) error {
-						if choice != scheduleChoiceCustom {
-							return nil
-						}
-						return validateCronExpression(s)
-					}).
-					Value(&custom),
-			),
 		)
 		if err != nil {
 			return err
 		}
-		vms[i].Schedule = resolveSchedule(choice, custom)
+		vms[i].Schedule = resolveSchedule(choice)
 	}
 	return nil
+}
+
+// warnUnmatchedPriorSchedules prints a warning naming every VM in
+// priorVMs that had a non-empty Schedule but matches neither the VMX
+// nor the Name of any VM present this run (presentVMX/presentName,
+// built once by promptSchedules from its own vms argument). Unlike a
+// VMX-only mismatch (handled by promptSchedules' name fallback above),
+// a VM matching neither field was very likely renamed -- discoverVMs
+// derives Name from the bundle's own folder name, so renaming the
+// bundle changes both fields at once, and there is no reliable way to
+// auto-match it back to its prior entry. Silently defaulting a case
+// like this to "none" is exactly how the mandatory post-write auto-sync
+// (internal/cli/init.go) ends up deleting a real, working LaunchAgent
+// with no warning to the user before they confirm.
+func warnUnmatchedPriorSchedules(out io.Writer, priorVMs []config.VM, presentVMX, presentName map[string]bool) error {
+	var lost []string
+	for _, p := range priorVMs {
+		if p.Schedule == "" {
+			continue
+		}
+		if presentVMX[p.VMX] || presentName[p.Name] {
+			continue
+		}
+		lost = append(lost, p.Name)
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(out, "warning: %d previously-scheduled VM(s) not found under their prior name or path this run -- their schedule was not carried forward: %s\n", len(lost), strings.Join(lost, ", "))
+	return err
 }
 
 // addManualVMs loops "add a VM manually?" (Confirm) followed, if yes, by
@@ -416,9 +490,11 @@ func reviewAndConfirm(ctx context.Context, in io.Reader, out io.Writer, accessib
 // non-terminal stdin (a pipe, a test's strings.Reader) correctly. It's
 // also how this package's own tests drive the wizard deterministically.
 //
-// prior is forwarded to promptCoreSettings -- see its doc comment. VM
-// selection and schedules are unaffected by prior; only core settings
-// seed from an existing config.
+// prior is forwarded to promptCoreSettings and promptSchedules -- see
+// their doc comments. VM selection itself is unaffected by prior (a
+// fresh init and init --force offer the same discovered candidates);
+// core settings and each selected VM's schedule seed their defaults
+// from an existing config when prior is non-nil.
 func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible bool, candidates []VMCandidate, prior *config.Config) (*config.Config, error) {
 	vms, err := selectVMs(ctx, in, out, accessible, candidates)
 	if err != nil {
@@ -433,7 +509,7 @@ func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible 
 		return nil, err
 	}
 
-	if err := promptSchedules(ctx, in, out, accessible, vms); err != nil {
+	if err := promptSchedules(ctx, in, out, accessible, vms, prior); err != nil {
 		return nil, err
 	}
 

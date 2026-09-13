@@ -66,6 +66,11 @@ func validateVMs(vms []VM) []error {
 		if strings.TrimSpace(vm.VMX) == "" {
 			errs = append(errs, fmt.Errorf("vms[%d]: vmx must not be empty", i))
 		}
+		switch vm.Schedule {
+		case "", "daily", "weekly", "monthly":
+		default:
+			errs = append(errs, fmt.Errorf("vms[%d]: schedule must be \"\", \"daily\", \"weekly\", or \"monthly\", got %q", i, vm.Schedule))
+		}
 	}
 	return errs
 }

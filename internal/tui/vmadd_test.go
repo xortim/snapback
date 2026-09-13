@@ -12,9 +12,8 @@ import (
 func TestAddVMs_SelectsDiscoveredAndSetsSchedule(t *testing.T) {
 	candidates := []VMCandidate{{Name: "new-vm", VMX: "/vms/new-vm.vmwarevm/new-vm.vmx"}}
 	// "0" confirms the MultiSelect's pre-selected default; "n" declines
-	// manual entry; "2" picks the "nightly" schedule preset; custom-cron
-	// blank (unused since nightly, not custom, was chosen).
-	in := strings.NewReader("0\nn\n2\n\n")
+	// manual entry; "2" picks the "daily" schedule preset.
+	in := strings.NewReader("0\nn\n2\n")
 	var out bytes.Buffer
 
 	vms, err := AddVMs(context.Background(), in, &out, true, candidates)
@@ -25,14 +24,14 @@ func TestAddVMs_SelectsDiscoveredAndSetsSchedule(t *testing.T) {
 		t.Fatalf("AddVMs() = %+v, want the one discovered candidate", vms)
 	}
 	if vms[0].Schedule == "" {
-		t.Errorf("Schedule = %q, want the nightly preset's cron expression set", vms[0].Schedule)
+		t.Errorf("Schedule = %q, want the daily preset's schedule value set", vms[0].Schedule)
 	}
 }
 
 func TestAddVMs_NoCandidates_PromptsManualEntry(t *testing.T) {
 	// manual-add confirm defaults to true (nothing discovered), name +
 	// vmx, decline a second manual VM, then "none" schedule.
-	in := strings.NewReader("\ndevbox\n/vms/devbox.vmx\nn\n\n\n")
+	in := strings.NewReader("\ndevbox\n/vms/devbox.vmx\nn\n\n")
 	var out bytes.Buffer
 
 	vms, err := AddVMs(context.Background(), in, &out, true, nil)
@@ -79,7 +78,7 @@ func TestAddVMs_SelectVMsError_IsPropagated(t *testing.T) {
 // tui-specific wrapper type leaks out.
 func TestAddVMs_ReturnsPlainConfigVMs(t *testing.T) {
 	candidates := []VMCandidate{{Name: "new-vm", VMX: "/vms/new-vm.vmx"}}
-	in := strings.NewReader("0\nn\n\n\n")
+	in := strings.NewReader("0\nn\n\n")
 	var out bytes.Buffer
 
 	vms, err := AddVMs(context.Background(), in, &out, true, candidates)

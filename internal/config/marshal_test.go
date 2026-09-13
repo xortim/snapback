@@ -14,7 +14,7 @@ func TestMarshal_ProducesExpectedYAML(t *testing.T) {
 		Compression: "zstd",
 		Retention:   config.Retention{KeepLast: 5, KeepDaily: 7, KeepWeekly: 4},
 		VMs: []config.VM{
-			{Name: "dev-ubuntu", VMX: "/vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx", Schedule: "0 2 * * *"},
+			{Name: "dev-ubuntu", VMX: "/vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx", Schedule: "daily"},
 			{Name: "win-testbed", VMX: "/vms/win-testbed.vmwarevm/win-testbed.vmx"},
 		},
 		Notifications: config.Notifications{Enabled: true},
@@ -33,7 +33,7 @@ retention:
 vms:
     - name: dev-ubuntu
       vmx: /vms/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
-      schedule: 0 2 * * *
+      schedule: daily
     - name: win-testbed
       vmx: /vms/win-testbed.vmwarevm/win-testbed.vmx
 notifications:

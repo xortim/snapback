@@ -361,6 +361,40 @@ func TestRunCmd_NilIsTerminal_UsesPlainOutput(t *testing.T) {
 	}
 }
 
+func TestRunCmd_RotatesOversizedLogBeforeBackup(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	logDir := filepath.Join(home, "Library", "Logs", "snapback")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	logPath := filepath.Join(logDir, "dev.log")
+	if err := os.WriteFile(logPath, make([]byte, 6*1024*1024), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	deps := runDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}}, nil
+		},
+		newController: func() (vm.Controller, error) { return vm.NewFakeVMController(), nil },
+		isTerminal:    func(io.Writer) bool { return false },
+	}
+	root := newTestRoot(t, deps)
+	root.SetArgs([]string{"run", "--vm", "dev", "--config", "/cfg/config.yaml"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	_ = root.Execute() // the fake controller/backup.Run may or may not succeed fully; rotation happens before that regardless
+
+	if _, err := os.Stat(logPath); !os.IsNotExist(err) {
+		t.Errorf("oversized log at %s still exists after run, want it rotated to %s.1", logPath, logPath)
+	}
+	if _, err := os.Stat(logPath + ".1"); err != nil {
+		t.Errorf(".1 rotated log missing: %v", err)
+	}
+}
+
 func TestDefaultIsTerminal_NonFileWriter_ReturnsFalse(t *testing.T) {
 	if defaultIsTerminal(&bytes.Buffer{}) {
 		t.Error("defaultIsTerminal(*bytes.Buffer) = true, want false")

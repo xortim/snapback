@@ -30,6 +30,7 @@ func NewRootCmd() *cobra.Command {
 		newCleanupCmd(),
 		newVMCmd(),
 		newRestoreCmd(),
+		newScheduleCmd(),
 	)
 
 	return root

@@ -56,6 +56,41 @@ func AcquireLock(destination, vmName string) (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
+// IsRunning reports whether a backup or cleanup is currently in
+// progress for vmName under destination -- i.e. whether a lock file for
+// it is currently held via flock(2). Unlike AcquireLock, this never
+// creates the lock file or its parent directory: it's a read-only probe
+// consulted before launchd.Sync tears down a VM's LaunchAgent, and this
+// codebase's convention (see internal/tui/init_validate.go's
+// validateWritableDestination doc comment) is that a mere check must
+// never create anything at the backup destination -- an unmounted
+// external drive's not-yet-existing mountpoint must stay untouched, not
+// get shadowed by a stray directory tree.
+func IsRunning(destination, vmName string) (bool, error) {
+	path := lockPath(destination, vmName)
+	f, err := os.OpenFile(path, os.O_RDONLY, 0o600)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No lock file at all means nothing has ever run for this
+			// VM under this destination -- definitely not running.
+			return false, nil
+		}
+		return false, fmt.Errorf("open lock file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
+			return true, nil
+		}
+		return false, fmt.Errorf("probe lock %q: %w", path, err)
+	}
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_UN); err != nil {
+		return false, fmt.Errorf("release probe lock %q: %w", path, err)
+	}
+	return false, nil
+}
+
 // Release unlocks and closes the lock file. Both current call sites use
 // a single defer, so a second call never happens today -- but Release
 // guards against one anyway: a nil receiver, or a Lock whose file has

@@ -12,6 +12,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/progress"
 	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
@@ -106,6 +107,15 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 	vmCfg, ok := findVMConfig(cfg.VMs, vmName)
 	if !ok {
 		return fmt.Errorf("no VM named %q in config %s", vmName, configPath)
+	}
+
+	if logPath, err := launchd.LogPath(vmCfg.Name); err == nil {
+		if err := launchd.RotateIfOversized(logPath); err != nil {
+			// Rotation failing is never a reason to skip the actual
+			// backup -- warn and continue, same posture warnIfMaybeOrphaned
+			// already takes for a non-fatal, best-effort side channel.
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not rotate log %s: %v\n", logPath, err)
+		}
 	}
 
 	ctrl, err := deps.newController()

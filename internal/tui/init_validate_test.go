@@ -89,15 +89,6 @@ func TestValidateNonNegativeInt(t *testing.T) {
 	}
 }
 
-func TestValidateCronExpression(t *testing.T) {
-	if err := validateCronExpression("0 2 * * *"); err != nil {
-		t.Errorf("validateCronExpression() error = %v, want nil for a valid 5-field expression", err)
-	}
-	if err := validateCronExpression("0 2 * *"); err == nil {
-		t.Error("validateCronExpression() error = nil, want an error for only 4 fields")
-	}
-}
-
 func TestAcceptBlankInAccessibleMode_Accessible_BlankPassesUnvalidated(t *testing.T) {
 	wrapped := acceptBlankInAccessibleMode(true, validateWritableDestination)
 	// validateWritableDestination on its own rejects "" (see

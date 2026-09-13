@@ -1,9 +1,9 @@
 # snapback
 
 Zero-downtime backup manager for VMware Fusion VMs on macOS. Snapshot,
-copy, checksum, restore today — `launchd` scheduling, retention
-pruning, and an xbar menu-bar plugin are next (see Status/Roadmap
-below).
+copy, checksum, restore, and scheduled unattended backups via `launchd`
+today — retention pruning and an xbar menu-bar plugin are next (see
+Status/Roadmap below).
 
 Built because [Vimalin](https://www.vimalin.com/) is GUI-only shareware
 and opaque about what it's actually doing. This does the same job —
@@ -32,9 +32,21 @@ reasoning that an unverified restore path is a bigger risk than manual
 archive by ID or by `--vm <name> --latest`, verifies its checksum,
 extracts it, confirms the restored disk chain is consistent, and places
 it as a new, non-destructively-named `.vmwarevm` bundle next to the
-source (`--dest <dir>` to override the inferred location). Current work
-is Phase 2 — `launchd` scheduling, `run --all`, and success/failure
-notifications. See [`docs/design.md`](docs/design.md) for the full ADR
+source (`--dest <dir>` to override the inferred location).
+
+Phase 2's scheduling half has now landed too: each VM's `schedule`
+(`daily` / `weekly` / `monthly`) generates its own LaunchAgent at
+`~/Library/LaunchAgents/com.tim.snapback.<vm-name>.plist`, installed and
+torn down automatically by `vm add` / `vm remove` / `init`, with
+`snapback schedule sync` to reconcile by hand after a config edit.
+Scheduled runs log to `~/Library/Logs/snapback/<vm-name>.log` with
+built-in size-based rotation. The other two items the original Phase 2
+bundled in are split out rather than shipped: success/failure
+notifications are tracked separately as
+[#86](https://github.com/xortim/snapback/issues/86), and `run --all`
+turned out to be unnecessary — one plist per VM means launchd fires
+each VM's `run --vm` independently. See
+[`docs/design.md`](docs/design.md) for the full ADR
 — architecture, choreography, config schema, risks, and the open
 questions still worth verifying locally, plus its own Roadmap section
 for the phase-by-phase detail this summary skips.
@@ -72,6 +84,7 @@ snapback run --vm dev-ubuntu        # on-demand backup of one configured VM (--a
 snapback list                       # backup archives, with timestamp and size
 snapback status                     # one row per configured VM: last backup, size, archive count
 snapback restore --vm dev-ubuntu --latest   # restore the newest archive as a new .vmwarevm, never overwriting the source
+snapback schedule sync              # reconcile each VM's LaunchAgent with its config `schedule` (init/vm add/vm remove do this for you)
 ```
 
 Full command reference — every subcommand and flag — is in
@@ -91,7 +104,7 @@ retention:
 vms:
   - name: dev-ubuntu
     vmx: ~/Virtual Machines/dev-ubuntu.vmwarevm/dev-ubuntu.vmx
-    schedule: "0 2 * * *"
+    schedule: daily # "" (unscheduled) | daily | weekly | monthly
 notifications:
   enabled: true
 ```
@@ -102,7 +115,7 @@ notifications:
 | ----------------- | --------------------------------------------------------------------------------------------------------- |
 | `snapback` binary | Backup/restore choreography, config, status                                                               |
 | `vmcli` / `vmrun` | Snapshot, list, delete — shelled out via a `VMController` interface, not sprinkled through business logic |
-| `launchd`         | Scheduling                                                                                                |
+| `launchd`         | Scheduling — one LaunchAgent per scheduled VM, generated from its `schedule` field                        |
 | xbar plugin       | Menu bar status + one-click backup                                                                        |
 
 Full detail — including the `checkToolsState` pre-flight quiescing
@@ -127,7 +140,7 @@ SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, need
 ## Roadmap
 
 - [x] Phase 1 — Core CLI (`init`, `run --vm`, `list`, `status`, `cleanup`, `vm add`/`vm remove`) plus the optional TUI layer, single VM at a time
-- [ ] Phase 2 — `launchd` scheduling, `run --all`, success/failure notifications
+- [x] Phase 2 — `launchd` scheduling: one LaunchAgent per scheduled VM, `snapback schedule sync`, auto-sync from `vm add`/`vm remove`/`init`, rotated per-VM logs. Success/failure notifications split out to [#86](https://github.com/xortim/snapback/issues/86); `run --all` dropped as unnecessary under the one-plist-per-VM model
 - [x] Phase 3 — Restore workflow, manifest-driven integrity check (pulled ahead of Phase 2 — see Status above)
 - [ ] Phase 4 — xbar plugin
 - [ ] Phase 5 — Retention/pruning policy engine (`prune` command; config already parses `keep_last`/`keep_daily`/`keep_weekly`)

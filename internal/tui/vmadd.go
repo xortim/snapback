@@ -27,7 +27,7 @@ func AddVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool, c
 		return nil, fmt.Errorf("invalid VM selection: %w", err)
 	}
 
-	if err := promptSchedules(ctx, in, out, accessible, vms); err != nil {
+	if err := promptSchedules(ctx, in, out, accessible, vms, nil); err != nil {
 		return nil, err
 	}
 	return vms, nil

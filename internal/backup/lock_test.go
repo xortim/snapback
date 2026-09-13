@@ -2,6 +2,8 @@ package backup_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/xortim/snapback/internal/backup"
@@ -51,4 +53,57 @@ func TestAcquireLock_ReleaseFreesTheLockForReacquisition(t *testing.T) {
 		t.Fatalf("AcquireLock() after Release() error = %v, want nil", err)
 	}
 	_ = lock2.Release()
+}
+
+func TestIsRunning_FalseWhenNoLockHeld(t *testing.T) {
+	dest := t.TempDir()
+	running, err := backup.IsRunning(dest, "myvm")
+	if err != nil {
+		t.Fatalf("IsRunning() error = %v, want nil", err)
+	}
+	if running {
+		t.Error("IsRunning() = true, want false -- nothing holds the lock")
+	}
+}
+
+func TestIsRunning_TrueWhileAnotherProcessHoldsTheLock(t *testing.T) {
+	dest := t.TempDir()
+	lock, err := backup.AcquireLock(dest, "myvm")
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v, want nil", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	running, err := backup.IsRunning(dest, "myvm")
+	if err != nil {
+		t.Fatalf("IsRunning() error = %v, want nil", err)
+	}
+	if !running {
+		t.Error("IsRunning() = false, want true -- the lock is held")
+	}
+}
+
+func TestIsRunning_DoesNotItselfHoldTheLockAfterReturning(t *testing.T) {
+	dest := t.TempDir()
+	if _, err := backup.IsRunning(dest, "myvm"); err != nil {
+		t.Fatalf("IsRunning() error = %v, want nil", err)
+	}
+
+	// If IsRunning leaked its own probe lock, this second AcquireLock
+	// would fail with ErrLocked.
+	lock, err := backup.AcquireLock(dest, "myvm")
+	if err != nil {
+		t.Fatalf("AcquireLock() after IsRunning() error = %v, want nil -- IsRunning must release its probe lock", err)
+	}
+	_ = lock.Release()
+}
+
+func TestIsRunning_DoesNotCreateLockFileOrDirectory(t *testing.T) {
+	dest := t.TempDir()
+	if _, err := backup.IsRunning(dest, "myvm"); err != nil {
+		t.Fatalf("IsRunning() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".snapback-locks")); !os.IsNotExist(err) {
+		t.Errorf("IsRunning() created %s, want it left absent for a VM with no lock history", filepath.Join(dest, ".snapback-locks"))
+	}
 }
