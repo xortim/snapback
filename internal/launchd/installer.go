@@ -35,6 +35,16 @@ type Installer interface {
 	// currently on disk (matching "com.tim.snapback.*"), regardless of
 	// whether it's currently bootstrapped.
 	List() ([]string, error)
+	// Read returns the current on-disk plist content for label without
+	// writing anything. ok is false (not an error) if no plist file
+	// exists for label yet. Sync uses this to decide whether an agent's
+	// content actually changed *before* calling Write or consulting
+	// RunningChecker -- Write itself both diffs and persists in one
+	// call, which would make every already-in-sync VM pay a
+	// RunningChecker probe (and, for a real backup destination, a
+	// filesystem round-trip) on every Sync even when nothing needed to
+	// change.
+	Read(label string) (data []byte, ok bool, err error)
 }
 
 // LaunchctlInstaller is the real Installer, shelling out to launchctl
@@ -132,6 +142,17 @@ func (l *LaunchctlInstaller) Remove(label string) error {
 		return err
 	}
 	return nil
+}
+
+func (l *LaunchctlInstaller) Read(label string) ([]byte, bool, error) {
+	data, err := os.ReadFile(l.plistPath(label))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return data, true, nil
 }
 
 func (l *LaunchctlInstaller) List() ([]string, error) {

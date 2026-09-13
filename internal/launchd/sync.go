@@ -1,6 +1,7 @@
 package launchd
 
 import (
+	"bytes"
 	"fmt"
 
 	"github.com/xortim/snapback/internal/config"
@@ -13,11 +14,13 @@ type SyncResult struct {
 	Installed []string // VM names newly given a LaunchAgent
 	Updated   []string // VM names whose LaunchAgent was rewritten and re-bootstrapped
 	Removed   []string // labels booted out and deleted
-	// Skipped lists VM names whose LaunchAgent needed an update (its
-	// plist content changed) but were left alone because a backup was
-	// in progress for that VM at the time -- see RunningChecker. Neither
-	// the on-disk plist nor the loaded job were touched, so the next
-	// Sync call will detect the same diff and retry.
+	// Skipped lists VM names whose LaunchAgent needed a change (new
+	// install or updated content) but were left alone because a backup
+	// was in progress for that VM at the time -- see RunningChecker.
+	// Neither the on-disk plist nor the loaded job were touched, so a
+	// later Sync call (there's no automatic retry -- something has to
+	// invoke Sync again, e.g. a re-run of `snapback schedule sync`) will
+	// detect the same diff and apply it then.
 	Skipped []string
 }
 
@@ -28,28 +31,32 @@ func (r SyncResult) IsEmpty() bool {
 
 // RunningChecker reports whether vmName currently has a backup in
 // progress (see backup.IsRunning). Sync consults this before tearing
-// down an *existing* LaunchAgent whose content changed -- Bootout
-// unloads the running job, which would otherwise kill a scheduled
-// backup mid-choreography (see CLAUDE.md's "Known gotchas" for the
-// orphaned-snapshot incident this guards against). This is only
-// consulted on the update path (an existing plist whose content
-// changed), never on a fresh install -- but "install" here just means
-// "no plist on disk" (see the doc comment on the installer.Bootout
-// call below): a job can still be loaded in launchd's session with its
-// plist hand-deleted, in which case the install path skips this check
-// and boots out unconditionally.
+// down a LaunchAgent whose content needs to change -- Bootout unloads
+// the running job, which would otherwise kill a scheduled backup
+// mid-choreography (see CLAUDE.md's "Known gotchas" for the
+// orphaned-snapshot incident this guards against). It's checked
+// whenever Sync has determined an agent's plist content actually
+// differs from what's on disk (see Sync's use of Installer.Read) --
+// including a fresh install, not just an update: "install" just means
+// "no plist on disk" (see the doc comment on the installer.Bootout call
+// below), and a job can still be loaded in launchd's session with its
+// plist hand-deleted, in which case a naive install-only check would
+// miss it and boot out unconditionally. An already-in-sync VM (content
+// unchanged) never consults this at all, so a flaky or unmounted backup
+// destination can't break a `schedule sync` that has nothing to do.
 //
 // This check has a TOCTOU gap: it probes the lock and releases it
 // immediately (see backup.IsRunning), so a launchd-started run that
 // begins in the narrow window between the probe and Sync's subsequent
 // Bootout call can still be killed. That's strictly better than before
-// this check existed (which always killed an in-flight run on the
-// update path), but it is not a complete guarantee.
+// this check existed (which always killed an in-flight run whenever
+// content changed), but it is not a complete guarantee.
 //
-// Scope limit: this guard only covers the update path above. The
-// removal loop below (VMs no longer scheduled, or dropped from config
-// entirely) still boots out unconditionally with no running-check at
-// all -- a known, deliberate gap tracked as
+// Scope limit: this guard only covers the loop below, for VMs still
+// present in vms with a non-empty Schedule. The removal loop further
+// down (VMs no longer scheduled, or dropped from config entirely) still
+// boots out unconditionally with no running-check at all -- a known,
+// deliberate gap tracked as
 // https://github.com/xortim/snapback/issues/96. It wasn't fixed here
 // because the removal loop only has the VM's *sanitized* launchd label
 // for a VM that's been fully removed from config, and checking against
@@ -63,9 +70,10 @@ type RunningChecker func(vmName string) (bool, error)
 // booted out first, so a stale or hand-orphaned loaded job can't make
 // Bootstrap fail. Every plist installer already knows about that no
 // longer corresponds to a scheduled VM in vms gets booted out and
-// removed. Safe to call
-// repeatedly -- an already-in-sync config produces an empty SyncResult
-// and no Installer calls beyond the one List().
+// removed. Safe to call repeatedly -- an already-in-sync config
+// produces an empty SyncResult and, for each already-scheduled VM, only
+// the one Read() beyond the initial List() (no Write, no isRunning
+// probe, no Bootout/Bootstrap).
 //
 // binaryPath is embedded into each plist's ProgramArguments as the
 // snapback binary to invoke (os.Executable(), resolved by the caller) --
@@ -108,30 +116,46 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 	var result SyncResult
 	for _, agent := range scheduled {
 		install := !existing[agent.Label]
-		if !install {
-			// Checked before Write (not after): Write persists the new
-			// plist content unconditionally, and that content is what
-			// "changed" below is diffed against next time. Checking
-			// first means a skip leaves the on-disk plist untouched, so
-			// the next Sync call still sees the real diff and retries --
-			// checking after Write would make the retry never fire,
-			// since the second call would find changed == false.
-			running, err := isRunning(agent.VMName)
+
+		// Determine whether this agent's content actually needs to
+		// change *before* calling Write or consulting isRunning --
+		// Write both diffs and persists in one call, so deciding
+		// "changed" from its return value would mean either probing
+		// isRunning (and, for a real destination, touching the
+		// filesystem) for every already-in-sync VM on every Sync, or
+		// leaving a skip's plist half-written. Read-then-compare keeps
+		// both Write and isRunning off the hot, common path where
+		// nothing needs to happen.
+		var changed bool
+		if install {
+			changed = true
+		} else {
+			existingData, ok, err := installer.Read(agent.Label)
 			if err != nil {
-				return result, fmt.Errorf("check running state for %q: %w", agent.VMName, err)
+				return result, fmt.Errorf("read existing plist for %q: %w", agent.VMName, err)
 			}
-			if running {
-				result.Skipped = append(result.Skipped, agent.VMName)
-				continue
+			candidate, err := renderPlist(agent)
+			if err != nil {
+				return result, fmt.Errorf("render plist for %q: %w", agent.VMName, err)
 			}
+			changed = !ok || !bytes.Equal(existingData, candidate)
+		}
+		if !changed {
+			continue
 		}
 
-		plistPath, changed, err := installer.Write(agent)
+		running, err := isRunning(agent.VMName)
+		if err != nil {
+			return result, fmt.Errorf("check running state for %q: %w", agent.VMName, err)
+		}
+		if running {
+			result.Skipped = append(result.Skipped, agent.VMName)
+			continue
+		}
+
+		plistPath, _, err := installer.Write(agent)
 		if err != nil {
 			return result, fmt.Errorf("write plist for %q: %w", agent.VMName, err)
-		}
-		if !install && !changed {
-			continue
 		}
 		// Bootout before Bootstrap on *both* paths, not just the update
 		// path. Bootstrap fails against an already-loaded label, and

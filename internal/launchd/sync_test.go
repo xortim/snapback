@@ -121,9 +121,35 @@ func TestSync_AlreadyInSync_IsANoOp(t *testing.T) {
 	if len(inst.BootoutCalls) != bootoutsAfterFirst {
 		t.Errorf("BootoutCalls after two Syncs = %v, want no new call from the second Sync", inst.BootoutCalls)
 	}
-	// Nothing at all beyond the Write the change-detection needs.
-	if got := inst.Calls[callsAfterFirst:]; len(got) != 1 || got[0] != "write:com.tim.snapback.dev" {
-		t.Errorf("second Sync() made calls %v, want only the change-detecting Write", got)
+	// Nothing at all beyond the Read the change-detection needs -- no
+	// Write, since nothing changed.
+	if got := inst.Calls[callsAfterFirst:]; len(got) != 1 || got[0] != "read:com.tim.snapback.dev" {
+		t.Errorf("second Sync() made calls %v, want only the change-detecting Read", got)
+	}
+}
+
+func TestSync_AlreadyInSync_NeverConsultsRunningCheck(t *testing.T) {
+	// A no-op sync must never depend on the backup destination being
+	// reachable -- previously isRunning was probed for every
+	// already-scheduled VM regardless of whether anything changed,
+	// coupling a routine `schedule sync` to destination availability it
+	// never needed before.
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+
+	called := false
+	isRunning := func(string) (bool, error) {
+		called = true
+		return false, nil
+	}
+	if _, err := Sync(inst, vms, "/bin/snapback", isRunning); err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if called {
+		t.Error("isRunning was called for an already-in-sync VM -- a flaky or unmounted backup destination must not be able to break a no-op sync")
 	}
 }
 
@@ -341,8 +367,12 @@ func TestSync_UpdatePath_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
 	if len(result.Updated) != 0 {
 		t.Errorf("result.Updated = %v, want none -- must not apply while running", result.Updated)
 	}
-	if got := inst.Calls[callsAfterInstall:]; len(got) != 0 {
-		t.Errorf("Calls after the skipped Sync = %v, want none -- Write/Bootout/Bootstrap must not run while the backup is in progress", got)
+	// The change-detecting Read still happens (that's how Sync knew
+	// "weekly" differs from the installed "daily" plist) -- just no
+	// Write/Bootout/Bootstrap while the backup is in progress.
+	label := "com.tim.snapback.dev"
+	if got := inst.Calls[callsAfterInstall:]; len(got) != 1 || got[0] != "read:"+label {
+		t.Errorf("Calls after the skipped Sync = %v, want only [\"read:%s\"] -- Write/Bootout/Bootstrap must not run while the backup is in progress", got, label)
 	}
 
 	// Once the backup finishes, the deferred update must still apply --
@@ -357,19 +387,47 @@ func TestSync_UpdatePath_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
 	}
 }
 
-func TestSync_FreshInstall_NeverConsultsRunningCheck(t *testing.T) {
+func TestSync_InstallPath_AlsoConsultsRunningCheck(t *testing.T) {
+	// "install" (no plist on disk, per Installer.List) doesn't mean
+	// nothing can be running under that label -- a hand-deleted plist
+	// can leave a job loaded (and, rarely, actively backing up) with no
+	// file left for List to see. The install path must consult the same
+	// guard as the update path.
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
 	called := false
-	isRunning := func(string) (bool, error) {
+	isRunning := func(name string) (bool, error) {
 		called = true
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
 		return false, nil
 	}
 	if _, err := Sync(inst, vms, "/bin/snapback", isRunning); err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
-	if called {
-		t.Error("isRunning was called for a fresh install -- nothing can be running under a label that was never bootstrapped")
+	if !called {
+		t.Error("isRunning was not called for a fresh install -- a hand-deleted plist can still leave a job loaded and running under this label")
+	}
+}
+
+func TestSync_InstallPath_SkipsWhenRunning(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	isRunning := func(string) (bool, error) { return true, nil }
+
+	result, err := Sync(inst, vms, "/bin/snapback", isRunning)
+	if err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "dev" {
+		t.Errorf("result.Skipped = %v, want [\"dev\"]", result.Skipped)
+	}
+	if len(result.Installed) != 0 {
+		t.Errorf("result.Installed = %v, want none while running", result.Installed)
+	}
+	if len(inst.WriteCalls) != 0 || len(inst.BootstrapCalls) != 0 || len(inst.BootoutCalls) != 0 {
+		t.Errorf("Write/Bootstrap/Bootout called = %v/%v/%v, want none while the (possibly loaded) job might be running", inst.WriteCalls, inst.BootstrapCalls, inst.BootoutCalls)
 	}
 }
 

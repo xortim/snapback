@@ -79,6 +79,45 @@ func TestLaunchctlInstaller_Write_ChangedWhenScheduleDiffers(t *testing.T) {
 	}
 }
 
+func TestLaunchctlInstaller_Read_MissingFileReturnsNotOK(t *testing.T) {
+	inst := &LaunchctlInstaller{Dir: t.TempDir()}
+	data, ok, err := inst.Read("com.tim.snapback.never-existed")
+	if err != nil {
+		t.Fatalf("Read() error = %v, want nil", err)
+	}
+	if ok {
+		t.Error("Read() ok = true for a nonexistent plist, want false")
+	}
+	if data != nil {
+		t.Errorf("Read() data = %v, want nil", data)
+	}
+}
+
+func TestLaunchctlInstaller_Read_ReturnsWrittenContent(t *testing.T) {
+	dir := t.TempDir()
+	inst := &LaunchctlInstaller{Dir: dir}
+	agent := Agent{Label: "com.tim.snapback.dev", VMName: "dev", BinaryPath: "/bin/snapback", LogPath: "/log", Interval: calendarInterval("daily")}
+
+	if _, _, err := inst.Write(agent); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	data, ok, err := inst.Read(agent.Label)
+	if err != nil {
+		t.Fatalf("Read() error = %v, want nil", err)
+	}
+	if !ok {
+		t.Fatal("Read() ok = false, want true after Write")
+	}
+	want, err := renderPlist(agent)
+	if err != nil {
+		t.Fatalf("renderPlist() error = %v", err)
+	}
+	if string(data) != string(want) {
+		t.Errorf("Read() data = %q, want %q", data, want)
+	}
+}
+
 func TestLaunchctlInstaller_Remove_MissingFileIsNotAnError(t *testing.T) {
 	inst := &LaunchctlInstaller{Dir: t.TempDir()}
 	if err := inst.Remove("com.tim.snapback.never-existed"); err != nil {

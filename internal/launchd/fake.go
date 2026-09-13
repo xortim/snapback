@@ -14,6 +14,7 @@ type FakeInstaller struct {
 	BootoutErr   error
 	RemoveErr    error
 	ListErr      error
+	ReadErr      error
 
 	// BootstrapFailAt, if non-zero, restricts BootstrapErr to only the
 	// call'th call to Bootstrap (1-indexed) -- every other call succeeds.
@@ -34,6 +35,7 @@ type FakeInstaller struct {
 	BootstrapCalls []string // plistPaths passed to Bootstrap
 	BootoutCalls   []string // labels passed to Bootout
 	RemoveCalls    []string // labels passed to Remove
+	ReadCalls      []string // labels passed to Read
 
 	// Calls is a single ordered log across all four methods above (e.g.
 	// "write:<label>", "bootstrap:<path>", "bootout:<label>",
@@ -93,6 +95,16 @@ func (f *FakeInstaller) Remove(label string) error {
 	}
 	delete(f.plists, label)
 	return nil
+}
+
+func (f *FakeInstaller) Read(label string) ([]byte, bool, error) {
+	f.ReadCalls = append(f.ReadCalls, label)
+	f.Calls = append(f.Calls, "read:"+label)
+	if f.ReadErr != nil {
+		return nil, false, f.ReadErr
+	}
+	data, ok := f.plists[label]
+	return data, ok, nil
 }
 
 func (f *FakeInstaller) List() ([]string, error) {
