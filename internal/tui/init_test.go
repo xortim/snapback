@@ -450,7 +450,10 @@ func TestPromptSchedules_PriorConfig_SeedsExistingScheduleAsDefault(t *testing.T
 func TestPromptSchedules_PriorConfig_NoMatchAtAll_DefaultsToNone(t *testing.T) {
 	vms := []config.VM{{Name: "dev2", VMX: "/vms/dev2.vmx"}}
 	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
-	in := strings.NewReader("\n")
+	// "dev" is unmatched (neither name nor VMX present this run), so the
+	// confirm prompt fires first -- "y" proceeds -- then blank accepts the
+	// default "none" schedule for "dev2".
+	in := strings.NewReader("y\n\n")
 	var out bytes.Buffer
 
 	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
@@ -495,13 +498,15 @@ func TestPromptSchedules_PriorConfig_VMXChangedButNameMatches_FallsBackToName(t 
 	}
 }
 
-func TestPromptSchedules_PriorConfig_UnmatchedScheduledVM_PrintsWarning(t *testing.T) {
+func TestPromptSchedules_PriorConfig_UnmatchedScheduledVM_ConfirmedProceeds(t *testing.T) {
 	// "old" matches neither Name nor VMX of anything in vms -- a true
 	// rename (or removal), which can't be auto-matched, so this must be
-	// surfaced instead of silently dropped.
+	// surfaced and confirmed instead of silently dropped.
 	vms := []config.VM{{Name: "new", VMX: "/vms/new.vmwarevm/new.vmx"}}
 	prior := &config.Config{VMs: []config.VM{{Name: "old", VMX: "/vms/old.vmwarevm/old.vmx", Schedule: "daily"}}}
-	in := strings.NewReader("\n")
+	// "y" confirms losing "old"'s LaunchAgent, then blank accepts the
+	// default "none" schedule for "new".
+	in := strings.NewReader("y\n\n")
 	var out bytes.Buffer
 
 	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
@@ -512,6 +517,23 @@ func TestPromptSchedules_PriorConfig_UnmatchedScheduledVM_PrintsWarning(t *testi
 	}
 	if !strings.Contains(out.String(), "old") {
 		t.Errorf("output = %q, want a warning naming the unmatched prior VM %q", out.String(), "old")
+	}
+}
+
+func TestPromptSchedules_PriorConfig_UnmatchedScheduledVM_DeclinedAborts(t *testing.T) {
+	vms := []config.VM{{Name: "new", VMX: "/vms/new.vmwarevm/new.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "old", VMX: "/vms/old.vmwarevm/old.vmx", Schedule: "daily"}}}
+	// Blank declines the confirm (its default is false) -- promptSchedules
+	// must abort before ever asking "new"'s own schedule question.
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	err := promptSchedules(context.Background(), in, &out, true, vms, prior)
+	if err == nil {
+		t.Fatal("promptSchedules() error = nil, want an abort error when the user declines to lose \"old\"'s LaunchAgent")
+	}
+	if vms[0].Schedule != "" {
+		t.Errorf("Schedule = %q, want untouched -- aborted before the schedule question", vms[0].Schedule)
 	}
 }
 

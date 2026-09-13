@@ -316,10 +316,11 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 // moved bundle keeps its schedule.
 //
 // If a prior VM's schedule was non-empty but matched neither Name nor
-// VMX (a true rename, or removal from this run's search), that's
-// reported by warnUnmatchedPriorSchedules, which prints a warning
-// naming the unmatched VM so the user notices instead of the schedule
-// silently vanishing.
+// VMX (a true rename, or removal from this run's search), that's caught
+// by confirmUnmatchedPriorSchedules, which names the unmatched VM and
+// requires the user to explicitly confirm losing its schedule -- init
+// aborts with the config left unwritten if they decline -- instead of
+// the schedule silently vanishing.
 func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM, prior *config.Config) error {
 	priorByVMX := make(map[string]string, len(vms))
 	priorByName := make(map[string]string, len(vms))
@@ -329,20 +330,24 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 			priorByName[p.Name] = p.Schedule
 		}
 
-		// Built once here and passed to warnUnmatchedPriorSchedules below,
-		// rather than that function rebuilding its own copy from vms --
-		// one source of truth for "is this VMX/Name present this run",
-		// so the seeding loop below and the warning can't silently
-		// disagree about what counts as a match if the matching rule
-		// ever changes.
+		// Built once here and passed to confirmUnmatchedPriorSchedules
+		// below, rather than that function rebuilding its own copy from
+		// vms -- one source of truth for "is this VMX/Name present this
+		// run", so the seeding loop below and the confirmation can't
+		// silently disagree about what counts as a match if the matching
+		// rule ever changes.
 		presentVMX := make(map[string]bool, len(vms))
 		presentName := make(map[string]bool, len(vms))
 		for _, v := range vms {
 			presentVMX[v.VMX] = true
 			presentName[v.Name] = true
 		}
-		if err := warnUnmatchedPriorSchedules(out, prior.VMs, presentVMX, presentName); err != nil {
+		proceed, err := confirmUnmatchedPriorSchedules(ctx, in, out, accessible, prior.VMs, presentVMX, presentName)
+		if err != nil {
 			return err
+		}
+		if !proceed {
+			return errors.New("init aborted: config not written")
 		}
 	}
 
@@ -376,19 +381,22 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 	return nil
 }
 
-// warnUnmatchedPriorSchedules prints a warning naming every VM in
-// priorVMs that had a non-empty Schedule but matches neither the VMX
-// nor the Name of any VM present this run (presentVMX/presentName,
-// built once by promptSchedules from its own vms argument). Unlike a
-// VMX-only mismatch (handled by promptSchedules' name fallback above),
-// a VM matching neither field was very likely renamed -- discoverVMs
-// derives Name from the bundle's own folder name, so renaming the
-// bundle changes both fields at once, and there is no reliable way to
-// auto-match it back to its prior entry. Silently defaulting a case
-// like this to "none" is exactly how the mandatory post-write auto-sync
-// (internal/cli/init.go) ends up deleting a real, working LaunchAgent
-// with no warning to the user before they confirm.
-func warnUnmatchedPriorSchedules(out io.Writer, priorVMs []config.VM, presentVMX, presentName map[string]bool) error {
+// confirmUnmatchedPriorSchedules names every VM in priorVMs that had a
+// non-empty Schedule but matches neither the VMX nor the Name of any VM
+// present this run (presentVMX/presentName, built once by promptSchedules
+// from its own vms argument), and requires the user to explicitly agree
+// to lose them before returning true. Unlike a VMX-only mismatch
+// (handled by promptSchedules' name fallback above), a VM matching
+// neither field was very likely renamed -- discoverVMs derives Name from
+// the bundle's own folder name, so renaming the bundle changes both
+// fields at once, and there is no reliable way to auto-match it back to
+// its prior entry. Silently defaulting a case like this to "none" used
+// to only print a warning and continue -- but the mandatory post-write
+// auto-sync (internal/cli/init.go) then deletes that VM's real, working
+// LaunchAgent, so a passive warning the user could miss wasn't a strong
+// enough guard against a destructive, silent outcome (#88). proceed is
+// true with no prompt at all when there's nothing unmatched to lose.
+func confirmUnmatchedPriorSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, priorVMs []config.VM, presentVMX, presentName map[string]bool) (bool, error) {
 	var lost []string
 	for _, p := range priorVMs {
 		if p.Schedule == "" {
@@ -400,10 +408,24 @@ func warnUnmatchedPriorSchedules(out io.Writer, priorVMs []config.VM, presentVMX
 		lost = append(lost, p.Name)
 	}
 	if len(lost) == 0 {
-		return nil
+		return true, nil
 	}
-	_, err := fmt.Fprintf(out, "warning: %d previously-scheduled VM(s) not found under their prior name or path this run -- their schedule was not carried forward: %s\n", len(lost), strings.Join(lost, ", "))
-	return err
+	if _, err := fmt.Fprintf(out, "warning: %d previously-scheduled VM(s) not found under their prior name or path this run -- continuing will delete their LaunchAgent: %s\n", len(lost), strings.Join(lost, ", ")); err != nil {
+		return false, err
+	}
+
+	confirmed := false
+	err := runForm(ctx, in, out, accessible,
+		huh.NewGroup(
+			huh.NewConfirm().
+				Title("Continue and delete their LaunchAgent(s)?").
+				Value(&confirmed),
+		),
+	)
+	if err != nil {
+		return false, err
+	}
+	return confirmed, nil
 }
 
 // addManualVMs loops "add a VM manually?" (Confirm) followed, if yes, by

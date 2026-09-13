@@ -203,6 +203,41 @@ func TestInitCmd_WritesWizardResult(t *testing.T) {
 	}
 }
 
+// TestInitCmd_SanitizedNameCollision_RejectedBeforeWriting covers #92:
+// the wizard can hand back two VMs whose names sanitize to the same
+// launchd label (config.Validate/ValidateVMs, which the wizard itself
+// already runs, has no way to catch this -- see launchd.DetectCollisions
+// and its import-cycle-driven separation from the config package). That
+// must be caught before config.yaml is written, not discovered only once
+// launchd.Sync runs.
+func TestInitCmd_SanitizedNameCollision_RejectedBeforeWriting(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{
+		Destination: "/dest",
+		Compression: "zstd",
+		VMs: []config.VM{
+			{Name: "My VM!", VMX: "/vms/a.vmx"},
+			{Name: "My VM?", VMX: "/vms/b.vmx"},
+		},
+	}
+	deps := fakeInitDeps(nil, false, &written, &writtenPath, cfg)
+
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	root.SetIn(&bytes.Buffer{})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "sanitize") {
+		t.Fatalf("Execute() error = %v, want it to mention the sanitized-label collision", err)
+	}
+	if written != nil {
+		t.Error("writeFile was called, want no write when the wizard's VM list collides")
+	}
+}
+
 func TestInitCmd_PassesDiscoveredCandidatesToWizard(t *testing.T) {
 	var gotCandidates []tui.VMCandidate
 	deps := initDeps{
@@ -439,6 +474,12 @@ func TestInitCmd_ExistingConfig_WithForce_Overwrites(t *testing.T) {
 	var writtenPath string
 	cfg := &config.Config{Destination: "/dest", Compression: "zstd", VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}}
 	deps := fakeInitDeps([]discoveredVM{{Name: "dev", VMX: "/vms/dev.vmx"}}, true, &written, &writtenPath, cfg)
+	// This test is about --force permitting an overwrite, not about the
+	// prefill load itself (covered separately by
+	// TestInitCmd_Force_LoadConfigError_Blocks) -- fakeInitDeps' loadConfig
+	// always errors, which would now block --force entirely, so give it a
+	// loadConfig that succeeds instead.
+	deps.loadConfig = func(string) (*config.Config, error) { return cfg, nil }
 
 	root := newTestRootForInit(t, deps)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
@@ -520,21 +561,24 @@ func TestInitCmd_Force_NoExistingConfig_PriorIsNilAndLoadConfigNotCalled(t *test
 	}
 }
 
-func TestInitCmd_Force_LoadConfigError_FallsBackToNilPriorWithNote(t *testing.T) {
-	var gotPrior *config.Config
-	priorWasNonNil := false
+// TestInitCmd_Force_LoadConfigError_Blocks covers #88: a failed prefill
+// load used to fall back to prior == nil and just print a note, which
+// silently reset every VM's schedule to "none" for the wizard -- and the
+// mandatory post-write auto-sync would then delete every real, working
+// LaunchAgent with no chance for the user to notice first. Blocking is
+// the safer default.
+func TestInitCmd_Force_LoadConfigError_Blocks(t *testing.T) {
 	deps := initDeps{
 		searchDirs:  func() []string { return nil },
 		discoverVMs: func([]string) ([]discoveredVM, error) { return nil, nil },
 		loadConfig:  func(string) (*config.Config, error) { return nil, errBoom },
 		marshal:     config.Marshal,
-		writeFile:   func(string, []byte) error { return nil },
+		writeFile:   func(string, []byte) error { t.Fatal("writeFile should not be called"); return nil },
 		fileExists:  func(string) bool { return true },
 		isTerminal:  func(io.Writer) bool { return false },
-		runWizard: func(_ context.Context, _ io.Reader, _ io.Writer, _ bool, _ []tui.VMCandidate, prior *config.Config) (*config.Config, error) {
-			gotPrior = prior
-			priorWasNonNil = prior != nil
-			return &config.Config{Destination: "/dest", Compression: "zstd"}, nil
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
+			t.Fatal("runWizard should not be called when the prefill load fails")
+			return nil, nil
 		},
 	}
 
@@ -542,17 +586,14 @@ func TestInitCmd_Force_LoadConfigError_FallsBackToNilPriorWithNote(t *testing.T)
 	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml", "--force"})
 	root.SetIn(&bytes.Buffer{})
 	root.SetOut(&bytes.Buffer{})
-	var errOut bytes.Buffer
-	root.SetErr(&errOut)
+	root.SetErr(&bytes.Buffer{})
 
-	if err := root.Execute(); err != nil {
-		t.Fatalf("Execute() error = %v, want a failed prefill load not to abort init", err)
+	err := root.Execute()
+	if err == nil || !errors.Is(err, errBoom) {
+		t.Fatalf("Execute() error = %v, want it to wrap errBoom", err)
 	}
-	if priorWasNonNil {
-		t.Errorf("prior passed to runWizard = %+v, want nil when loading the existing config fails", gotPrior)
-	}
-	if !strings.Contains(errOut.String(), errBoom.Error()) {
-		t.Errorf("stderr = %q, want it to note the failed prefill load", errOut.String())
+	if !strings.Contains(err.Error(), "--force") {
+		t.Errorf("Execute() error = %v, want it to mention --force", err)
 	}
 }
 

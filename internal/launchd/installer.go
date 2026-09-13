@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"github.com/xortim/snapback/internal/atomicfile"
 )
 
 // Installer is the shell-out/filesystem boundary for launchd plist
@@ -94,7 +96,11 @@ func (l *LaunchctlInstaller) Write(agent Agent) (string, bool, error) {
 			return "", false, fmt.Errorf("create %s: %w", logDir, err)
 		}
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	// Atomic (temp file + rename) rather than truncating path directly --
+	// mirrors internal/cli's writeConfigFile for the same reason: a crash
+	// or power loss mid-write must not leave a truncated, corrupt plist on
+	// disk for `launchctl bootstrap` to choke on (see issue #94).
+	if err := atomicfile.WriteFile(path, data, 0o644); err != nil {
 		return "", false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return path, true, nil

@@ -52,16 +52,16 @@ func (r SyncResult) IsEmpty() bool {
 // this check existed (which always killed an in-flight run whenever
 // content changed), but it is not a complete guarantee.
 //
-// Scope limit: this guard only covers the loop below, for VMs still
-// present in vms with a non-empty Schedule. The removal loop further
-// down (VMs no longer scheduled, or dropped from config entirely) still
-// boots out unconditionally with no running-check at all -- a known,
-// deliberate gap tracked as
-// https://github.com/xortim/snapback/issues/96. It wasn't fixed here
-// because the removal loop only has the VM's *sanitized* launchd label
-// for a VM that's been fully removed from config, and checking against
-// the sanitized name instead of the real config.VM.Name would silently
-// never detect a real running state for names that needed sanitizing.
+// Scope limit: the loop below covers every VM still present in vms,
+// whether it's newly scheduled, updated, or had its Schedule cleared to
+// "" (which routes it into the removal loop further down, since it's no
+// longer in desiredLabels) -- the real config.VM.Name is available for
+// all of those. The one case still uncovered is a VM removed from vms
+// entirely (`vm remove`): the removal loop only has that VM's
+// *sanitized* launchd label by then, and checking against the sanitized
+// name instead of the real Name would silently never detect a real
+// running state for names that needed sanitizing. That narrower gap is
+// tracked as https://github.com/xortim/snapback/issues/96.
 type RunningChecker func(vmName string) (bool, error)
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM
@@ -88,6 +88,17 @@ type RunningChecker func(vmName string) (bool, error)
 func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning RunningChecker) (SyncResult, error) {
 	if err := DetectCollisions(vms); err != nil {
 		return SyncResult{}, err
+	}
+
+	// nameByLabel covers every VM still in vms, scheduled or not -- used
+	// by the removal loop below to recover the real config.VM.Name for a
+	// VM whose schedule was just cleared to "" (still configured, just no
+	// longer desired), so that case can be running-checked like any other
+	// VM instead of falling into the unconditional-bootout gap that
+	// applies only once a VM is removed from vms entirely.
+	nameByLabel := make(map[string]string, len(vms))
+	for _, v := range vms {
+		nameByLabel[labelPrefix+sanitizeLabel(v.Name)] = v.Name
 	}
 
 	var scheduled []Agent
@@ -183,6 +194,23 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 		if desiredLabels[label] {
 			continue
 		}
+
+		// vmName is only set for a VM still present in vms (its schedule
+		// was cleared to "", not removed from config entirely) -- see
+		// nameByLabel's doc comment and RunningChecker's Scope limit
+		// above for why a VM removed from vms entirely can't be checked
+		// here.
+		if vmName, ok := nameByLabel[label]; ok {
+			running, err := isRunning(vmName)
+			if err != nil {
+				return result, fmt.Errorf("check running state for %q: %w", vmName, err)
+			}
+			if running {
+				result.Skipped = append(result.Skipped, vmName)
+				continue
+			}
+		}
+
 		if err := installer.Bootout(label); err != nil {
 			return result, fmt.Errorf("bootout %q: %w", label, err)
 		}
