@@ -36,11 +36,16 @@ func nthCall(calls []string, want string, n int) int {
 	return -1
 }
 
+// neverRunning is a RunningChecker stub for tests that aren't exercising
+// the running-check guard itself -- always reports "not running" so
+// Sync's existing bootout/bootstrap behavior is unaffected.
+func neverRunning(string) (bool, error) { return false, nil }
+
 func TestSync_InstallsNewlyScheduledVM(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
 
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -75,7 +80,7 @@ func TestSync_UnscheduledVM_NeverWritten(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}} // Schedule == ""
 
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("Sync() error = %v", err)
 	}
@@ -93,7 +98,7 @@ func TestSync_UnscheduledVM_NeverWritten(t *testing.T) {
 func TestSync_AlreadyInSync_IsANoOp(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
-	if _, err := Sync(inst, vms, "/bin/snapback"); err != nil {
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
 		t.Fatalf("first Sync() error = %v", err)
 	}
 	// Snapshot the first Sync's calls; the assertion below is that the
@@ -103,7 +108,7 @@ func TestSync_AlreadyInSync_IsANoOp(t *testing.T) {
 	bootstrapsAfterFirst := len(inst.BootstrapCalls)
 	bootoutsAfterFirst := len(inst.BootoutCalls)
 
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("second Sync() error = %v", err)
 	}
@@ -125,12 +130,12 @@ func TestSync_AlreadyInSync_IsANoOp(t *testing.T) {
 func TestSync_ScheduleChanged_UpdatesAndRebootstraps(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
-	if _, err := Sync(inst, vms, "/bin/snapback"); err != nil {
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
 		t.Fatalf("first Sync() error = %v", err)
 	}
 
 	vms[0].Schedule = "weekly"
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("second Sync() error = %v", err)
 	}
@@ -167,12 +172,12 @@ func TestSync_ScheduleChanged_UpdatesAndRebootstraps(t *testing.T) {
 func TestSync_ScheduleCleared_RemovesPlist(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
-	if _, err := Sync(inst, vms, "/bin/snapback"); err != nil {
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
 		t.Fatalf("first Sync() error = %v", err)
 	}
 
 	vms[0].Schedule = ""
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("second Sync() error = %v", err)
 	}
@@ -200,11 +205,11 @@ func TestSync_ScheduleCleared_RemovesPlist(t *testing.T) {
 func TestSync_VMNoLongerInList_RemovesPlist(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
-	if _, err := Sync(inst, vms, "/bin/snapback"); err != nil {
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
 		t.Fatalf("first Sync() error = %v", err)
 	}
 
-	result, err := Sync(inst, nil, "/bin/snapback")
+	result, err := Sync(inst, nil, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("second Sync() error = %v", err)
 	}
@@ -219,7 +224,7 @@ func TestSync_CollidingNames_ErrorsBeforeWritingAnything(t *testing.T) {
 		{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: "daily"},
 		{Name: "My VM?", VMX: "/vms/b.vmx", Schedule: "weekly"},
 	}
-	_, err := Sync(inst, vms, "/bin/snapback")
+	_, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err == nil {
 		t.Fatal("Sync() error = nil, want the collision rejected")
 	}
@@ -241,12 +246,12 @@ func TestSync_MixedWorkload_InstallsOneAndRemovesAnother(t *testing.T) {
 	inst := NewFakeInstaller()
 	// "old" is already installed and about to be dropped from the config
 	// entirely; "new" doesn't exist yet.
-	if _, err := Sync(inst, []config.VM{{Name: "old", VMX: "/vms/old.vmx", Schedule: "daily"}}, "/bin/snapback"); err != nil {
+	if _, err := Sync(inst, []config.VM{{Name: "old", VMX: "/vms/old.vmx", Schedule: "daily"}}, "/bin/snapback", neverRunning); err != nil {
 		t.Fatalf("first Sync() error = %v", err)
 	}
 
 	vms := []config.VM{{Name: "new", VMX: "/vms/new.vmx", Schedule: "daily"}}
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err != nil {
 		t.Fatalf("second Sync() error = %v", err)
 	}
@@ -299,7 +304,7 @@ func TestSync_ErrorMidLoop_PreservesPartialResult(t *testing.T) {
 		{Name: "second", VMX: "/vms/second.vmx", Schedule: "daily"},
 	}
 
-	result, err := Sync(inst, vms, "/bin/snapback")
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
 	if err == nil {
 		t.Fatal("Sync() error = nil, want the second VM's Bootstrap failure surfaced")
 	}
@@ -308,5 +313,77 @@ func TestSync_ErrorMidLoop_PreservesPartialResult(t *testing.T) {
 	}
 	if len(inst.BootstrapCalls) != 2 {
 		t.Errorf("BootstrapCalls = %v, want both attempted (first succeeds, second fails)", inst.BootstrapCalls)
+	}
+}
+
+func TestSync_UpdatePath_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	callsAfterInstall := len(inst.Calls)
+
+	vms[0].Schedule = "weekly"
+	stillRunning := func(name string) (bool, error) {
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
+		return true, nil
+	}
+	result, err := Sync(inst, vms, "/bin/snapback", stillRunning)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "dev" {
+		t.Errorf("result.Skipped = %v, want [\"dev\"]", result.Skipped)
+	}
+	if len(result.Updated) != 0 {
+		t.Errorf("result.Updated = %v, want none -- must not apply while running", result.Updated)
+	}
+	if got := inst.Calls[callsAfterInstall:]; len(got) != 0 {
+		t.Errorf("Calls after the skipped Sync = %v, want none -- Write/Bootout/Bootstrap must not run while the backup is in progress", got)
+	}
+
+	// Once the backup finishes, the deferred update must still apply --
+	// proves the skip doesn't get permanently stuck because Write was
+	// never called to mark it as already-applied.
+	result, err = Sync(inst, vms, "/bin/snapback", neverRunning)
+	if err != nil {
+		t.Fatalf("third Sync() error = %v", err)
+	}
+	if len(result.Updated) != 1 || result.Updated[0] != "dev" {
+		t.Errorf("third Sync() result.Updated = %v, want [\"dev\"] once no longer running", result.Updated)
+	}
+}
+
+func TestSync_FreshInstall_NeverConsultsRunningCheck(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	called := false
+	isRunning := func(string) (bool, error) {
+		called = true
+		return false, nil
+	}
+	if _, err := Sync(inst, vms, "/bin/snapback", isRunning); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if called {
+		t.Error("isRunning was called for a fresh install -- nothing can be running under a label that was never bootstrapped")
+	}
+}
+
+func TestSync_RunningCheckError_IsPropagated(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+
+	vms[0].Schedule = "weekly"
+	boom := errors.New("lock check boom")
+	_, err := Sync(inst, vms, "/bin/snapback", func(string) (bool, error) { return false, boom })
+	if err == nil || !errors.Is(err, boom) {
+		t.Errorf("Sync() error = %v, want it to wrap %v", err, boom)
 	}
 }

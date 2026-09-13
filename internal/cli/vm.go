@@ -133,7 +133,7 @@ func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 	}
 
 	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.VMs); err != nil {
+		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
 			return err
 		}
 	}
@@ -177,7 +177,7 @@ func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
 	}
 
 	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.VMs); err != nil {
+		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
 			return err
 		}
 	}

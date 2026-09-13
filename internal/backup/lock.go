@@ -56,6 +56,25 @@ func AcquireLock(destination, vmName string) (*Lock, error) {
 	return &Lock{f: f}, nil
 }
 
+// IsRunning reports whether a backup or cleanup is currently in
+// progress for vmName under destination -- i.e. whether AcquireLock
+// would fail with ErrLocked right now. Used by launchd.Sync
+// (RunningChecker) to avoid tearing down a VM's LaunchAgent while its
+// scheduled run is still executing: Bootout unloads the job, sending it
+// SIGTERM/SIGKILL outside this package's own choreography, which is the
+// orphaned-snapshot incident class CLAUDE.md documents as a real,
+// confirmed failure mode.
+func IsRunning(destination, vmName string) (bool, error) {
+	lock, err := AcquireLock(destination, vmName)
+	if err != nil {
+		if errors.Is(err, ErrLocked) {
+			return true, nil
+		}
+		return false, err
+	}
+	return false, lock.Release()
+}
+
 // Release unlocks and closes the lock file. Both current call sites use
 // a single defer, so a second call never happens today -- but Release
 // guards against one anyway: a nil receiver, or a Lock whose file has

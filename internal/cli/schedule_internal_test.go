@@ -66,7 +66,7 @@ func TestScheduleSyncCmd_InstallsNewSchedule(t *testing.T) {
 func TestScheduleSyncCmd_Removed_PrintsVMNameNotRawLabel(t *testing.T) {
 	// Pre-install "dev", then sync against a config that no longer has it.
 	inst := launchd.NewFakeInstaller()
-	if _, err := launchd.Sync(inst, []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}, "/bin/snapback"); err != nil {
+	if _, err := launchd.Sync(inst, []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
 		t.Fatalf("seed Sync() error = %v", err)
 	}
 

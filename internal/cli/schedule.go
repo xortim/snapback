@@ -7,6 +7,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/launchd"
 )
@@ -63,14 +64,17 @@ func runScheduleSync(cmd *cobra.Command, deps scheduleDeps) error {
 	if err != nil {
 		return err
 	}
-	return syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.VMs)
+	return syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs)
 }
 
 // syncSchedules connects to launchd, resolves the running binary's path,
 // runs launchd.Sync, and prints the result -- shared by `schedule sync`
-// and the auto-sync call sites in `vm add`/`vm remove`/`init` (Tasks
-// 9-10) so there's exactly one place that does this, not four.
-func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, error), executable func() (string, error), vms []config.VM) error {
+// and the auto-sync call sites in `vm add`/`vm remove`/`init` so there's
+// exactly one place that does this, not four. destination is cfg's
+// backup destination, forwarded to backup.IsRunning so Sync can tell
+// whether a VM's scheduled run is currently in progress before tearing
+// down its LaunchAgent.
+func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, error), executable func() (string, error), destination string, vms []config.VM) error {
 	installer, err := newInstaller()
 	if err != nil {
 		return fmt.Errorf("connect to launchd: %w", err)
@@ -80,7 +84,11 @@ func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, e
 		return fmt.Errorf("resolve snapback binary path: %w", err)
 	}
 
-	result, err := launchd.Sync(installer, vms, binaryPath)
+	isRunning := func(vmName string) (bool, error) {
+		return backup.IsRunning(destination, vmName)
+	}
+
+	result, err := launchd.Sync(installer, vms, binaryPath, isRunning)
 	if err != nil {
 		return fmt.Errorf("sync launchd schedules: %w", err)
 	}
@@ -99,6 +107,11 @@ func printSyncResult(out io.Writer, result launchd.SyncResult) error {
 	}
 	for _, name := range result.Updated {
 		if _, err := fmt.Fprintf(out, "updated: %s\n", name); err != nil {
+			return err
+		}
+	}
+	for _, name := range result.Skipped {
+		if _, err := fmt.Fprintf(out, "skipped: %s (backup in progress, will retry on next sync)\n", name); err != nil {
 			return err
 		}
 	}

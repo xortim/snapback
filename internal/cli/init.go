@@ -193,7 +193,7 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	}
 
 	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.VMs); err != nil {
+		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
 			return err
 		}
 	}

@@ -13,12 +13,29 @@ type SyncResult struct {
 	Installed []string // VM names newly given a LaunchAgent
 	Updated   []string // VM names whose LaunchAgent was rewritten and re-bootstrapped
 	Removed   []string // labels booted out and deleted
+	// Skipped lists VM names whose LaunchAgent needed an update (its
+	// plist content changed) but were left alone because a backup was
+	// in progress for that VM at the time -- see RunningChecker. Neither
+	// the on-disk plist nor the loaded job were touched, so the next
+	// Sync call will detect the same diff and retry.
+	Skipped []string
 }
 
 // IsEmpty reports whether Sync found nothing to do.
 func (r SyncResult) IsEmpty() bool {
-	return len(r.Installed) == 0 && len(r.Updated) == 0 && len(r.Removed) == 0
+	return len(r.Installed) == 0 && len(r.Updated) == 0 && len(r.Removed) == 0 && len(r.Skipped) == 0
 }
+
+// RunningChecker reports whether vmName currently has a backup in
+// progress (see backup.IsRunning). Sync consults this before tearing
+// down an *existing* LaunchAgent whose content changed -- Bootout
+// unloads the running job, which would otherwise kill a scheduled
+// backup mid-choreography (see CLAUDE.md's "Known gotchas" for the
+// orphaned-snapshot incident this guards against). A freshly-scheduled
+// VM with no existing LaunchAgent has nothing running under launchd to
+// race, so this is only consulted on the update path, never the install
+// path.
+type RunningChecker func(vmName string) (bool, error)
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM
 // with a non-empty Schedule gets its plist written and (re-)bootstrapped
@@ -40,7 +57,7 @@ func (r SyncResult) IsEmpty() bool {
 // succeeded), the returned SyncResult still reflects everything
 // completed before the failure -- it is not zeroed out -- so callers can
 // report partial progress to the user alongside the error.
-func Sync(installer Installer, vms []config.VM, binaryPath string) (SyncResult, error) {
+func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning RunningChecker) (SyncResult, error) {
 	if err := DetectCollisions(vms); err != nil {
 		return SyncResult{}, err
 	}
@@ -70,11 +87,29 @@ func Sync(installer Installer, vms []config.VM, binaryPath string) (SyncResult, 
 
 	var result SyncResult
 	for _, agent := range scheduled {
+		install := !existing[agent.Label]
+		if !install {
+			// Checked before Write (not after): Write persists the new
+			// plist content unconditionally, and that content is what
+			// "changed" below is diffed against next time. Checking
+			// first means a skip leaves the on-disk plist untouched, so
+			// the next Sync call still sees the real diff and retries --
+			// checking after Write would make the retry never fire,
+			// since the second call would find changed == false.
+			running, err := isRunning(agent.VMName)
+			if err != nil {
+				return result, fmt.Errorf("check running state for %q: %w", agent.VMName, err)
+			}
+			if running {
+				result.Skipped = append(result.Skipped, agent.VMName)
+				continue
+			}
+		}
+
 		plistPath, changed, err := installer.Write(agent)
 		if err != nil {
 			return result, fmt.Errorf("write plist for %q: %w", agent.VMName, err)
 		}
-		install := !existing[agent.Label]
 		if !install && !changed {
 			continue
 		}
