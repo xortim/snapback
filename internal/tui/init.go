@@ -316,10 +316,11 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 // moved bundle keeps its schedule.
 //
 // If a prior VM's schedule was non-empty but matched neither Name nor
-// VMX (a true rename, or removal from this run's search), that's
-// reported by warnUnmatchedPriorSchedules, which prints a warning
-// naming the unmatched VM so the user notices instead of the schedule
-// silently vanishing.
+// VMX (a true rename, or removal from this run's search), that's caught
+// by confirmUnmatchedPriorSchedules, which names the unmatched VM and
+// requires the user to explicitly confirm losing its schedule -- init
+// aborts with the config left unwritten if they decline -- instead of
+// the schedule silently vanishing.
 func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM, prior *config.Config) error {
 	priorByVMX := make(map[string]string, len(vms))
 	priorByName := make(map[string]string, len(vms))

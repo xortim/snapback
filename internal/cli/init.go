@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
+	"github.com/xortim/snapback/internal/atomicfile"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
@@ -48,41 +48,16 @@ func newInitCmd() *cobra.Command {
 	})
 }
 
-// writeConfigFile creates the config file's parent directory if it
-// doesn't already exist, then writes data to path with 0644 permissions
-// -- world-readable, since config.yaml holds no secrets, just VM paths
-// and retention settings. Left unwrapped: runInit already wraps whatever
-// this returns as "write config: %w", and a second wrap here would just
-// double that context.
-//
-// Writes to a temp file in the same directory first, then renames it
-// into place, rather than truncating path directly -- with --force
-// overwriting an existing config, a write that's interrupted partway
-// (disk full, process killed) must not leave the user's previous,
-// working config truncated.
+// writeConfigFile writes data to path with 0644 permissions --
+// world-readable, since config.yaml holds no secrets, just VM paths and
+// retention settings -- atomically (see internal/atomicfile), so a write
+// interrupted partway (disk full, process killed) can't leave the user's
+// previous, working config truncated when --force overwrites an existing
+// one. Left unwrapped: runInit already wraps whatever this returns as
+// "write config: %w", and a second wrap here would just double that
+// context.
 func writeConfigFile(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, ".config-*.yaml.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	defer func() { _ = os.Remove(tmpPath) }() // no-op once Rename below succeeds
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpPath, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, path)
+	return atomicfile.WriteFile(path, data, 0o644)
 }
 
 // configFileExists reports whether path exists, treating any Stat error

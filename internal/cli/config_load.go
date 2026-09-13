@@ -43,6 +43,21 @@ func configPathForCmd(cmd *cobra.Command) (string, error) {
 // on a fresh machine with no config.yaml yet, that raw error is the very
 // first thing a new user sees and gives no hint of how to fix it.
 func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.Config, error)) (cfg *config.Config, configPath string, err error) {
+	return loadConfigForCmdOpts(cmd, loadConfig, true)
+}
+
+// loadConfigForCmdSkipCollisionCheck is loadConfigForCmd without the
+// sanitized-label collision check. `vm remove` is the one command meant to
+// let an operator recover from a colliding config (e.g. hand-edited, or
+// written before the check existed, #93) -- if it went through the normal
+// collision check like every other subcommand, a pre-existing collision
+// would reject the load before cfg is even returned, permanently locking
+// the user out of the only command that can fix it (#97).
+func loadConfigForCmdSkipCollisionCheck(cmd *cobra.Command, loadConfig func(path string) (*config.Config, error)) (cfg *config.Config, configPath string, err error) {
+	return loadConfigForCmdOpts(cmd, loadConfig, false)
+}
+
+func loadConfigForCmdOpts(cmd *cobra.Command, loadConfig func(path string) (*config.Config, error), checkCollisions bool) (cfg *config.Config, configPath string, err error) {
 	configPath, err = configPathForCmd(cmd)
 	if err != nil {
 		return nil, "", err
@@ -63,8 +78,10 @@ func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.
 	// before this check existed) would only surface when launchd.Sync
 	// happened to run, leaving `run --vm` free to rotate/write two VMs'
 	// logs to the same sanitized path with no error at all (#93).
-	if err := launchd.DetectCollisions(cfg.VMs); err != nil {
-		return nil, "", fmt.Errorf("%s: %w", configPath, err)
+	if checkCollisions {
+		if err := launchd.DetectCollisions(cfg.VMs); err != nil {
+			return nil, "", fmt.Errorf("%s: %w", configPath, err)
+		}
 	}
 	return cfg, configPath, nil
 }

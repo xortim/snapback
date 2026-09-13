@@ -147,7 +147,10 @@ func newVMRemoveCmdWithDeps(deps vmDeps) *cobra.Command {
 }
 
 func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
-	cfg, configPath, err := loadConfigForCmd(cmd, deps.loadConfig)
+	// Skips the sanitized-label collision check that loadConfigForCmd
+	// normally applies -- vm remove is the one command that must still work
+	// on a config already in collision, since it's the recovery path (#97).
+	cfg, configPath, err := loadConfigForCmdSkipCollisionCheck(cmd, deps.loadConfig)
 	if err != nil {
 		return err
 	}

@@ -366,6 +366,48 @@ func TestVMRemoveCmd_RemovesNamedVMAndWrites(t *testing.T) {
 	}
 }
 
+// TestVMRemoveCmd_CollidingConfig_StillRemoves covers #97: unlike every
+// other subcommand, vm remove must still work on a config that already has
+// a sanitized-label collision, since it's the one command that can fix it.
+// If it rejected the load like the others, a pre-existing collision would
+// permanently lock the user out of the CLI recovery path.
+func TestVMRemoveCmd_CollidingConfig_StillRemoves(t *testing.T) {
+	var written []byte
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: "/dest",
+				VMs: []config.VM{
+					{Name: "My VM!", VMX: "/vms/a.vmx"},
+					{Name: "My VM?", VMX: "/vms/b.vmx"},
+				},
+			}, nil
+		},
+		marshal: config.Marshal,
+		writeFile: func(path string, data []byte) error {
+			written = data
+			return nil
+		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "remove", "My VM?", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want the colliding config to still load for vm remove", err)
+	}
+	if strings.Contains(string(written), "My VM?") {
+		t.Errorf("written config = %q, want \"My VM?\" gone", written)
+	}
+	if !strings.Contains(string(written), "My VM!") {
+		t.Errorf("written config = %q, want \"My VM!\" to remain", written)
+	}
+}
+
 func TestVMRemoveCmd_RequiresExactlyOneArg(t *testing.T) {
 	deps := vmDeps{
 		loadConfig: func(string) (*config.Config, error) { t.Fatal("loadConfig should not be called"); return nil, nil },
