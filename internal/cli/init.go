@@ -193,7 +193,18 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	}
 
 	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
+		// cfg here is the wizard's freshly-built config, whose Destination
+		// is still the raw, unexpanded value the user typed (e.g.
+		// "~/Backups/snapback") -- unlike the other syncSchedules call
+		// sites (schedule.go, vm.go), which all load cfg via config.Load
+		// and so get it pre-expanded. Expand a local copy just for this
+		// call; cfg.Destination itself, and what's already been written to
+		// config.yaml above, must stay in the portable "~/..." form.
+		expandedDest, err := config.ExpandTilde(cfg.Destination)
+		if err != nil {
+			return fmt.Errorf("expand destination: %w", err)
+		}
+		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, expandedDest, cfg.VMs); err != nil {
 			return err
 		}
 	}

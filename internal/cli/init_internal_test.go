@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
@@ -655,5 +656,65 @@ func TestInitCmd_SyncsLaunchdSchedules(t *testing.T) {
 	_ = written
 	if !strings.Contains(out.String(), "installed: dev") {
 		t.Errorf("stdout = %q, want \"installed: dev\" from the auto-sync", out.String())
+	}
+}
+
+// TestInitCmd_SyncSchedules_ExpandsTildeDestinationBeforeRunningCheck
+// guards against a regression where init's syncSchedules call forwarded
+// the wizard's raw, unexpanded Destination (e.g. "~/backups") straight
+// to backup.IsRunning instead of expanding it first like the other
+// syncSchedules call sites (schedule.go, vm.go) do via config.Load. If
+// that regression reappears, backup.IsRunning would look for the lock
+// file under a literal "~" directory relative to the process's CWD,
+// never find the real held lock below, and the update would proceed
+// ("updated: dev") instead of being skipped.
+func TestInitCmd_SyncSchedules_ExpandsTildeDestinationBeforeRunningCheck(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	inst := launchd.NewFakeInstaller()
+	seedVMs := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := launchd.Sync(inst, seedVMs, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	expandedDest := filepath.Join(home, "backups")
+	lock, err := backup.AcquireLock(expandedDest, "dev")
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v, want nil", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	cfg := &config.Config{
+		Destination: "~/backups",
+		Compression: "zstd",
+		VMs:         []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "weekly"}},
+	}
+	deps := initDeps{
+		searchDirs:   func() []string { return nil },
+		discoverVMs:  func([]string) ([]discoveredVM, error) { return nil, nil },
+		loadConfig:   func(string) (*config.Config, error) { return nil, errBoom },
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		fileExists:   func(string) bool { return false },
+		isTerminal:   func(io.Writer) bool { return false },
+		isTerminalIn: func(io.Reader) bool { return false },
+		runWizard: func(context.Context, io.Reader, io.Writer, bool, []tui.VMCandidate, *config.Config) (*config.Config, error) {
+			return cfg, nil
+		},
+		newInstaller: func() (launchd.Installer, error) { return inst, nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForInit(t, deps)
+	root.SetArgs([]string{"init", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "skipped: dev") {
+		t.Errorf("stdout = %q, want \"skipped: dev\" -- proves \"~/backups\" was expanded to %q before backup.IsRunning found the held lock there", out.String(), expandedDest)
 	}
 }

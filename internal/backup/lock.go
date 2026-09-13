@@ -57,22 +57,38 @@ func AcquireLock(destination, vmName string) (*Lock, error) {
 }
 
 // IsRunning reports whether a backup or cleanup is currently in
-// progress for vmName under destination -- i.e. whether AcquireLock
-// would fail with ErrLocked right now. Used by launchd.Sync
-// (RunningChecker) to avoid tearing down a VM's LaunchAgent while its
-// scheduled run is still executing: Bootout unloads the job, sending it
-// SIGTERM/SIGKILL outside this package's own choreography, which is the
-// orphaned-snapshot incident class CLAUDE.md documents as a real,
-// confirmed failure mode.
+// progress for vmName under destination -- i.e. whether a lock file for
+// it is currently held via flock(2). Unlike AcquireLock, this never
+// creates the lock file or its parent directory: it's a read-only probe
+// consulted before launchd.Sync tears down a VM's LaunchAgent, and this
+// codebase's convention (see internal/tui/init_validate.go's
+// validateWritableDestination doc comment) is that a mere check must
+// never create anything at the backup destination -- an unmounted
+// external drive's not-yet-existing mountpoint must stay untouched, not
+// get shadowed by a stray directory tree.
 func IsRunning(destination, vmName string) (bool, error) {
-	lock, err := AcquireLock(destination, vmName)
+	path := lockPath(destination, vmName)
+	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
 	if err != nil {
-		if errors.Is(err, ErrLocked) {
+		if os.IsNotExist(err) {
+			// No lock file at all means nothing has ever run for this
+			// VM under this destination -- definitely not running.
+			return false, nil
+		}
+		return false, fmt.Errorf("open lock file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+		if errors.Is(err, unix.EWOULDBLOCK) {
 			return true, nil
 		}
-		return false, err
+		return false, fmt.Errorf("probe lock %q: %w", path, err)
 	}
-	return false, lock.Release()
+	if err := unix.Flock(int(f.Fd()), unix.LOCK_UN); err != nil {
+		return false, fmt.Errorf("release probe lock %q: %w", path, err)
+	}
+	return false, nil
 }
 
 // Release unlocks and closes the lock file. Both current call sites use

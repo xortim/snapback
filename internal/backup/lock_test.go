@@ -2,6 +2,8 @@ package backup_test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/xortim/snapback/internal/backup"
@@ -94,4 +96,14 @@ func TestIsRunning_DoesNotItselfHoldTheLockAfterReturning(t *testing.T) {
 		t.Fatalf("AcquireLock() after IsRunning() error = %v, want nil -- IsRunning must release its probe lock", err)
 	}
 	_ = lock.Release()
+}
+
+func TestIsRunning_DoesNotCreateLockFileOrDirectory(t *testing.T) {
+	dest := t.TempDir()
+	if _, err := backup.IsRunning(dest, "myvm"); err != nil {
+		t.Fatalf("IsRunning() error = %v, want nil", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, ".snapback-locks")); !os.IsNotExist(err) {
+		t.Errorf("IsRunning() created %s, want it left absent for a VM with no lock history", filepath.Join(dest, ".snapback-locks"))
+	}
 }
