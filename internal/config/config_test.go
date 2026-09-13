@@ -124,6 +124,72 @@ retention:
 	}
 }
 
+func TestLoad_MigratesLegacyCronNightlyScheduleToDaily(t *testing.T) {
+	path := writeTempConfig(t, `
+destination: /Volumes/Backups/snapback
+retention:
+  keep_last: 1
+  keep_daily: 1
+  keep_weekly: 1
+vms:
+  - name: dev
+    vmx: /vms/dev.vmwarevm/dev.vmx
+    schedule: "0 2 * * *"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v, want the legacy nightly cron schedule migrated instead of rejected", err)
+	}
+	if cfg.VMs[0].Schedule != "daily" {
+		t.Errorf("VMs[0].Schedule = %q, want %q (migrated from legacy cron)", cfg.VMs[0].Schedule, "daily")
+	}
+}
+
+func TestLoad_MigratesLegacyCronWeeklyScheduleToWeekly(t *testing.T) {
+	path := writeTempConfig(t, `
+destination: /Volumes/Backups/snapback
+retention:
+  keep_last: 1
+  keep_daily: 1
+  keep_weekly: 1
+vms:
+  - name: dev
+    vmx: /vms/dev.vmwarevm/dev.vmx
+    schedule: "0 2 * * 0"
+`)
+
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load returned error: %v, want the legacy weekly cron schedule migrated instead of rejected", err)
+	}
+	if cfg.VMs[0].Schedule != "weekly" {
+		t.Errorf("VMs[0].Schedule = %q, want %q (migrated from legacy cron)", cfg.VMs[0].Schedule, "weekly")
+	}
+}
+
+func TestLoad_RejectsGenuinelyInvalidSchedule(t *testing.T) {
+	path := writeTempConfig(t, `
+destination: /Volumes/Backups/snapback
+retention:
+  keep_last: 1
+  keep_daily: 1
+  keep_weekly: 1
+vms:
+  - name: dev
+    vmx: /vms/dev.vmwarevm/dev.vmx
+    schedule: bogus
+`)
+
+	_, err := config.Load(path)
+	if err == nil {
+		t.Fatal("Load returned nil error for an unparseable schedule, want it still rejected")
+	}
+	if !strings.Contains(err.Error(), "schedule") {
+		t.Errorf("Load error = %q, want it to mention \"schedule\"", err.Error())
+	}
+}
+
 func writeTempConfig(t *testing.T, contents string) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "config.yaml")

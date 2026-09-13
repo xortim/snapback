@@ -64,6 +64,10 @@ func Load(path string) (*Config, error) {
 			return nil, fmt.Errorf("parse %s: expand vms[%d].vmx: %w", path, i, err)
 		}
 		cfg.VMs[i].VMX = expandedVMX
+		// Applied before Validate below so a config.yaml written by the
+		// pre-ADR-005 wizard's cron-string schedules still loads -- see
+		// migrateLegacySchedule's doc comment.
+		cfg.VMs[i].Schedule = migrateLegacySchedule(cfg.VMs[i].Schedule)
 	}
 
 	// A config.yaml written before Validate existed may omit compression
