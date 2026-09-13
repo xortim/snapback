@@ -307,17 +307,43 @@ func selectVMs(ctx context.Context, in io.Reader, out io.Writer, accessible bool
 // working scheduled backups, not just reset a config field. A VM with
 // no match in prior (renamed, or newly selected this run) still starts
 // at "none", same as a fresh init.
+//
+// If a prior VM matched by Name but not VMX (e.g. a bundle moved
+// between search directories with its folder name unchanged), the prior
+// schedule is still seeded here (via the name fallback) instead of
+// silently defaulting to "none", which would then be auto-synced away
+// by internal/cli/init.go's post-write LaunchAgent sync. This ensures a
+// moved bundle keeps its schedule.
+//
+// If a prior VM's schedule was non-empty but matched neither Name nor
+// VMX (a true rename, or removal from this run's search), that's
+// reported by warnUnmatchedPriorSchedules, which prints a warning
+// naming the unmatched VM so the user notices instead of the schedule
+// silently vanishing.
 func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessible bool, vms []config.VM, prior *config.Config) error {
 	priorByVMX := make(map[string]string, len(vms))
+	priorByName := make(map[string]string, len(vms))
 	if prior != nil {
 		for _, p := range prior.VMs {
 			priorByVMX[p.VMX] = p.Schedule
+			priorByName[p.Name] = p.Schedule
+		}
+		if err := warnUnmatchedPriorSchedules(out, prior.VMs, vms); err != nil {
+			return err
 		}
 	}
 
 	for i := range vms {
 		choice := scheduleChoiceNone
 		if schedule, ok := priorByVMX[vms[i].VMX]; ok {
+			choice = scheduleChoiceFor(schedule)
+		} else if schedule, ok := priorByName[vms[i].Name]; ok {
+			// VMX changed but the bundle's folder name (and thus Name,
+			// per discoverVMs) didn't -- a bundle moved between search
+			// directories, not renamed. Falls back here rather than
+			// defaulting to "none" and letting the mandatory post-write
+			// auto-sync (internal/cli/init.go) delete a real,
+			// still-correct LaunchAgent.
 			choice = scheduleChoiceFor(schedule)
 		}
 
@@ -335,6 +361,42 @@ func promptSchedules(ctx context.Context, in io.Reader, out io.Writer, accessibl
 		vms[i].Schedule = resolveSchedule(choice)
 	}
 	return nil
+}
+
+// warnUnmatchedPriorSchedules prints a warning naming every VM in
+// priorVMs that had a non-empty Schedule but matches neither the VMX
+// nor the Name of any VM in vms this run. Unlike a VMX-only mismatch
+// (handled by promptSchedules' name fallback above), a VM matching
+// neither field was very likely renamed -- discoverVMs derives Name
+// from the bundle's own folder name, so renaming the bundle changes
+// both fields at once, and there is no reliable way to auto-match it
+// back to its prior entry. Silently defaulting a case like this to
+// "none" is exactly how the mandatory post-write auto-sync
+// (internal/cli/init.go) ends up deleting a real, working LaunchAgent
+// with no warning to the user before they confirm.
+func warnUnmatchedPriorSchedules(out io.Writer, priorVMs, vms []config.VM) error {
+	presentVMX := make(map[string]bool, len(vms))
+	presentName := make(map[string]bool, len(vms))
+	for _, v := range vms {
+		presentVMX[v.VMX] = true
+		presentName[v.Name] = true
+	}
+
+	var lost []string
+	for _, p := range priorVMs {
+		if p.Schedule == "" {
+			continue
+		}
+		if presentVMX[p.VMX] || presentName[p.Name] {
+			continue
+		}
+		lost = append(lost, p.Name)
+	}
+	if len(lost) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(out, "warning: %d previously-scheduled VM(s) not found under their prior name or path this run -- their schedule was not carried forward: %s\n", len(lost), strings.Join(lost, ", "))
+	return err
 }
 
 // addManualVMs loops "add a VM manually?" (Confirm) followed, if yes, by

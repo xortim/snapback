@@ -447,8 +447,8 @@ func TestPromptSchedules_PriorConfig_SeedsExistingScheduleAsDefault(t *testing.T
 	}
 }
 
-func TestPromptSchedules_PriorConfig_NoMatchingVMX_DefaultsToNone(t *testing.T) {
-	vms := []config.VM{{Name: "dev", VMX: "/vms/dev-renamed.vmx"}}
+func TestPromptSchedules_PriorConfig_NoMatchAtAll_DefaultsToNone(t *testing.T) {
+	vms := []config.VM{{Name: "dev2", VMX: "/vms/dev2.vmx"}}
 	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
 	in := strings.NewReader("\n")
 	var out bytes.Buffer
@@ -457,7 +457,7 @@ func TestPromptSchedules_PriorConfig_NoMatchingVMX_DefaultsToNone(t *testing.T) 
 		t.Fatalf("promptSchedules() error = %v", err)
 	}
 	if vms[0].Schedule != "" {
-		t.Errorf("Schedule = %q, want empty -- no prior VM shares this VMX", vms[0].Schedule)
+		t.Errorf("Schedule = %q, want empty -- no prior VM shares this name or VMX", vms[0].Schedule)
 	}
 }
 
@@ -475,6 +475,57 @@ func TestPromptSchedules_PriorConfig_CanStillBeChangedExplicitly(t *testing.T) {
 	}
 	if vms[0].Schedule != "" {
 		t.Errorf("Schedule = %q, want empty -- explicit choice should override the seeded default", vms[0].Schedule)
+	}
+}
+
+func TestPromptSchedules_PriorConfig_VMXChangedButNameMatches_FallsBackToName(t *testing.T) {
+	// Same Name, different VMX -- a bundle moved to a different search
+	// directory without being renamed (discoverVMs' Name comes from the
+	// bundle folder name, which a plain move leaves unchanged).
+	vms := []config.VM{{Name: "dev", VMX: "/vms/other-dir/dev.vmwarevm/dev.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx", Schedule: "daily"}}}
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if vms[0].Schedule != "daily" {
+		t.Errorf("Schedule = %q, want %q (seeded via name fallback despite the changed VMX)", vms[0].Schedule, "daily")
+	}
+}
+
+func TestPromptSchedules_PriorConfig_UnmatchedScheduledVM_PrintsWarning(t *testing.T) {
+	// "old" matches neither Name nor VMX of anything in vms -- a true
+	// rename (or removal), which can't be auto-matched, so this must be
+	// surfaced instead of silently dropped.
+	vms := []config.VM{{Name: "new", VMX: "/vms/new.vmwarevm/new.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "old", VMX: "/vms/old.vmwarevm/old.vmx", Schedule: "daily"}}}
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if vms[0].Schedule != "" {
+		t.Errorf("Schedule = %q, want empty -- \"new\" has no prior match of its own", vms[0].Schedule)
+	}
+	if !strings.Contains(out.String(), "old") {
+		t.Errorf("output = %q, want a warning naming the unmatched prior VM %q", out.String(), "old")
+	}
+}
+
+func TestPromptSchedules_PriorConfig_AllMatched_NoWarning(t *testing.T) {
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx"}}
+	prior := &config.Config{VMs: []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}}
+	in := strings.NewReader("\n")
+	var out bytes.Buffer
+
+	if err := promptSchedules(context.Background(), in, &out, true, vms, prior); err != nil {
+		t.Fatalf("promptSchedules() error = %v", err)
+	}
+	if strings.Contains(out.String(), "warning") {
+		t.Errorf("output = %q, want no warning -- the only prior VM was matched", out.String())
 	}
 }
 
