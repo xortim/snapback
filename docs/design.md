@@ -126,7 +126,7 @@ notifications:
   enabled: true
 ```
 
-`schedule` is a closed enum, not cron syntax — `""`/omitted (unscheduled), `daily` (midnight), `weekly` (Sunday midnight), or `monthly` (1st, midnight), mirroring cron's own `@daily`/`@weekly`/`@monthly` meta-schedules. `config.Load` rejects anything else. It was originally documented here as free-form cron; nothing had ever consumed the field, so [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) narrowed it when launchd scheduling landed, which removes an entire class of cron-to-`StartCalendarInterval` translation bugs at the cost of no configurable time-of-day.
+`schedule` is a closed enum, not cron syntax — `""`/omitted (unscheduled), `daily` (midnight), `weekly` (Sunday midnight), or `monthly` (1st, midnight), mirroring cron's own `@daily`/`@weekly`/`@monthly` meta-schedules. `config.Validate` rejects anything else. `config.Load` is more lenient: it first migrates a legacy 5-field cron-string schedule (as pre-ADR-005 `init` wizards wrote, e.g. `"0 2 * * *"`) to the nearest enum value — day-of-month pinned -> `monthly`, day-of-week pinned -> `weekly`, otherwise -> `daily` — before calling Validate, so an existing config.yaml written before this narrowing still loads instead of breaking every command; only non-cron garbage still gets rejected. It was originally documented here as free-form cron; nothing had ever consumed the field, so [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) narrowed it when launchd scheduling landed, which removes an entire class of cron-to-`StartCalendarInterval` translation bugs at the cost of no configurable time-of-day.
 
 ## xbar Plugin Output Format
 

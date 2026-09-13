@@ -111,7 +111,7 @@ func printSyncResult(out io.Writer, result launchd.SyncResult) error {
 		}
 	}
 	for _, name := range result.Skipped {
-		if _, err := fmt.Fprintf(out, "skipped: %s (backup in progress, will retry on next sync)\n", name); err != nil {
+		if _, err := fmt.Fprintf(out, "skipped: %s (backup in progress; re-run `snapback schedule sync` once it finishes)\n", name); err != nil {
 			return err
 		}
 	}

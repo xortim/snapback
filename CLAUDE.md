@@ -171,7 +171,7 @@ with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
 
 | Piece         | Role                                                                     |
 | ------------- | ------------------------------------------------------------------------- |
-| `launchd`     | Scheduling — **one LaunchAgent per scheduled VM**, at `~/Library/LaunchAgents/com.tim.snapback.<sanitized-vm-name>.plist`, generated from that VM's `schedule` field. `schedule` is a closed enum (`""`/`daily`/`weekly`/`monthly`), **not** cron syntax — `config.Load` rejects anything else |
+| `launchd`     | Scheduling — **one LaunchAgent per scheduled VM**, at `~/Library/LaunchAgents/com.tim.snapback.<sanitized-vm-name>.plist`, generated from that VM's `schedule` field. `schedule` is a closed enum (`""`/`daily`/`weekly`/`monthly`), **not** cron syntax — `config.Validate` rejects anything else; `config.Load` first migrates a legacy cron-string schedule to the nearest enum value (`internal/config/migrate.go`) before validating |
 | xbar plugin   | Shell script wrapping `snapback status --xbar`; text above `---` is the menu bar line, everything below is the dropdown |
 | Config        | YAML at `~/.config/snapback/config.yaml` — destination, compression, retention (keep_last/daily/weekly), per-VM name/vmx/schedule |
 

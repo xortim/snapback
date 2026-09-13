@@ -31,10 +31,30 @@ func (r SyncResult) IsEmpty() bool {
 // down an *existing* LaunchAgent whose content changed -- Bootout
 // unloads the running job, which would otherwise kill a scheduled
 // backup mid-choreography (see CLAUDE.md's "Known gotchas" for the
-// orphaned-snapshot incident this guards against). A freshly-scheduled
-// VM with no existing LaunchAgent has nothing running under launchd to
-// race, so this is only consulted on the update path, never the install
-// path.
+// orphaned-snapshot incident this guards against). This is only
+// consulted on the update path (an existing plist whose content
+// changed), never on a fresh install -- but "install" here just means
+// "no plist on disk" (see the doc comment on the installer.Bootout
+// call below): a job can still be loaded in launchd's session with its
+// plist hand-deleted, in which case the install path skips this check
+// and boots out unconditionally.
+//
+// This check has a TOCTOU gap: it probes the lock and releases it
+// immediately (see backup.IsRunning), so a launchd-started run that
+// begins in the narrow window between the probe and Sync's subsequent
+// Bootout call can still be killed. That's strictly better than before
+// this check existed (which always killed an in-flight run on the
+// update path), but it is not a complete guarantee.
+//
+// Scope limit: this guard only covers the update path above. The
+// removal loop below (VMs no longer scheduled, or dropped from config
+// entirely) still boots out unconditionally with no running-check at
+// all -- a known, deliberate gap tracked as
+// https://github.com/xortim/snapback/issues/96. It wasn't fixed here
+// because the removal loop only has the VM's *sanitized* launchd label
+// for a VM that's been fully removed from config, and checking against
+// the sanitized name instead of the real config.VM.Name would silently
+// never detect a real running state for names that needed sanitizing.
 type RunningChecker func(vmName string) (bool, error)
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM

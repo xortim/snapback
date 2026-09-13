@@ -68,7 +68,7 @@ func AcquireLock(destination, vmName string) (*Lock, error) {
 // get shadowed by a stray directory tree.
 func IsRunning(destination, vmName string) (bool, error) {
 	path := lockPath(destination, vmName)
-	f, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	f, err := os.OpenFile(path, os.O_RDONLY, 0o600)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No lock file at all means nothing has ever run for this
