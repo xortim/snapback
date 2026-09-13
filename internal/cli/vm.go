@@ -124,18 +124,8 @@ func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 		return fmt.Errorf("invalid VM selection: %w", err)
 	}
 
-	data, err := deps.marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("render config: %w", err)
-	}
-	if err := deps.writeFile(configPath, data); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
-			return err
-		}
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination); err != nil {
+		return err
 	}
 
 	_, err = fmt.Fprintf(out, "added %d VM(s), wrote config to %s\n", len(added), configPath)
@@ -168,18 +158,8 @@ func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
 	}
 	cfg.VMs = remaining
 
-	data, err := deps.marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("render config: %w", err)
-	}
-	if err := deps.writeFile(configPath, data); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
-			return err
-		}
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination); err != nil {
+		return err
 	}
 
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %q, wrote config to %s\n", name, configPath)

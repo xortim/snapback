@@ -127,20 +127,20 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	// back to factory defaults or "none" -- runInit auto-syncs
 	// LaunchAgents right after writing config below, so a reset schedule
 	// here doesn't just change a config field, it deletes a working
-	// LaunchAgent. A failure to load the existing config doesn't abort
-	// init -- --force re-running over a config that's gone stale or
-	// unparseable is itself a legitimate reason to run init, so this
-	// falls back to the hardcoded defaults instead of blocking that.
+	// LaunchAgent. A failure to load the existing config used to fall
+	// back to prior == nil and just print a note -- but that silently
+	// reset every VM's schedule to "none" the same way, so the very next
+	// auto-sync would delete every real, working LaunchAgent with no
+	// chance for the user to notice or object first (#88). Blocking here
+	// is the safer default; the user can fix or remove the unparseable
+	// config.yaml first, or rerun without --force.
 	var prior *config.Config
 	if force && exists {
 		loaded, loadErr := deps.loadConfig(configPath)
 		if loadErr != nil {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not load existing config at %s, proposing defaults instead: %v\n", configPath, loadErr); err != nil {
-				return err
-			}
-		} else {
-			prior = loaded
+			return fmt.Errorf("could not load existing config at %s to preserve VM schedules: %w (fix or remove it, or rerun without --force)", configPath, loadErr)
 		}
+		prior = loaded
 	}
 
 	// extraSearchDirs (--search-dir, repeatable) is appended after the
@@ -184,29 +184,23 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 		}
 	}
 
-	data, err := deps.marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("render config: %w", err)
-	}
-	if err := deps.writeFile(configPath, data); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
+	// cfg here is the wizard's freshly-built config, whose Destination is
+	// still the raw, unexpanded value the user typed (e.g.
+	// "~/Backups/snapback") -- unlike the other persistConfigAndSync call
+	// sites (vm.go), which all load cfg via config.Load and so get it
+	// pre-expanded. Expand a local copy just for the sync call; cfg.Destination
+	// itself, and what gets written to config.yaml, must stay in the
+	// portable "~/..." form.
+	syncDest := cfg.Destination
 	if deps.newInstaller != nil {
-		// cfg here is the wizard's freshly-built config, whose Destination
-		// is still the raw, unexpanded value the user typed (e.g.
-		// "~/Backups/snapback") -- unlike the other syncSchedules call
-		// sites (schedule.go, vm.go), which all load cfg via config.Load
-		// and so get it pre-expanded. Expand a local copy just for this
-		// call; cfg.Destination itself, and what's already been written to
-		// config.yaml above, must stay in the portable "~/..." form.
-		expandedDest, err := config.ExpandTilde(cfg.Destination)
+		expanded, err := config.ExpandTilde(cfg.Destination)
 		if err != nil {
 			return fmt.Errorf("expand destination: %w", err)
 		}
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, expandedDest, cfg.VMs); err != nil {
-			return err
-		}
+		syncDest = expanded
+	}
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, syncDest); err != nil {
+		return err
 	}
 
 	_, err = fmt.Fprintf(out, "wrote config to %s\n", configPath)

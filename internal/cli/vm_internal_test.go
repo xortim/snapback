@@ -246,6 +246,33 @@ func TestVMAddCmd_ManualEntryDuplicatingExistingName_ReturnsError(t *testing.T) 
 	}
 }
 
+// TestVMAddCmd_SanitizedNameCollision_RejectedBeforeWriting covers #92:
+// "My VM!" and "My VM?" are distinct, valid names under
+// config.ValidateVMs (which TestVMAddCmd_ManualEntryDuplicatingExistingName_ReturnsError
+// already covers), but sanitize to the identical launchd label -- that
+// must be caught, and must be caught before config.yaml is written, not
+// discovered only once launchd.Sync runs.
+func TestVMAddCmd_SanitizedNameCollision_RejectedBeforeWriting(t *testing.T) {
+	var written []byte
+	var writtenPath string
+	cfg := &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "My VM!", VMX: "/vms/a.vmx"}}}
+	added := []config.VM{{Name: "My VM?", VMX: "/vms/b.vmx"}}
+	deps := fakeVMDeps(cfg, nil, added, &written, &writtenPath)
+
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "add", "--config", "/cfg/config.yaml"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "sanitize") {
+		t.Fatalf("Execute() error = %v, want it to mention the sanitized-label collision", err)
+	}
+	if written != nil {
+		t.Error("writeFile was called, want no write when the merged VM list collides")
+	}
+}
+
 func TestVMAddCmd_AddVMsError_IsPropagatedUnwrapped(t *testing.T) {
 	deps := vmDeps{
 		loadConfig:  func(string) (*config.Config, error) { return &config.Config{Destination: "/dest"}, nil },

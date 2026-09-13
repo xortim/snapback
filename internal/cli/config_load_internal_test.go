@@ -84,6 +84,28 @@ func TestConfigPathForCmd_ExplicitEmptyFlag_ReturnsError(t *testing.T) {
 	}
 }
 
+// TestLoadConfigForCmd_CollidingVMNames_Rejected covers #93: two VMs
+// whose names sanitize to the same launchd label must be caught at the
+// one choke point every subcommand loads config.yaml through, not just
+// when launchd.Sync happens to run -- otherwise `run --vm` for either
+// name would silently rotate/write to the identical log path.
+func TestLoadConfigForCmd_CollidingVMNames_Rejected(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("config", "/some/path.yaml", "")
+
+	cfg := &config.Config{VMs: []config.VM{
+		{Name: "My VM!", VMX: "/vms/a.vmx"},
+		{Name: "My VM?", VMX: "/vms/b.vmx"},
+	}}
+	_, _, err := loadConfigForCmd(cmd, func(string) (*config.Config, error) { return cfg, nil })
+	if err == nil {
+		t.Fatal("loadConfigForCmd() error = nil, want the sanitized-name collision rejected")
+	}
+	if !strings.Contains(err.Error(), "/some/path.yaml") {
+		t.Errorf("loadConfigForCmd() error = %q, want it to name the config path", err.Error())
+	}
+}
+
 func TestLoadConfigForCmd_ReturnsConfigAndPath(t *testing.T) {
 	cmd := &cobra.Command{}
 	cmd.Flags().String("config", "/some/path.yaml", "")

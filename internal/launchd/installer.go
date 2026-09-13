@@ -94,10 +94,37 @@ func (l *LaunchctlInstaller) Write(agent Agent) (string, bool, error) {
 			return "", false, fmt.Errorf("create %s: %w", logDir, err)
 		}
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := writeFileAtomic(path, data, 0o644); err != nil {
 		return "", false, fmt.Errorf("write %s: %w", path, err)
 	}
 	return path, true, nil
+}
+
+// writeFileAtomic writes data to a temp file in path's directory, then
+// renames it into place, rather than truncating path directly -- mirrors
+// internal/cli/init.go's writeConfigFile for the same reason: a crash or
+// power loss mid-write must not leave a truncated, corrupt plist on disk
+// for `launchctl bootstrap` to choke on (see issue #94).
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".plist-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }() // no-op once Rename below succeeds
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
 }
 
 func (l *LaunchctlInstaller) Bootstrap(plistPath string) error {

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 )
 
 // configPathForCmd reads the --config persistent flag. Shared by every
@@ -53,6 +54,17 @@ func loadConfigForCmd(cmd *cobra.Command, loadConfig func(path string) (*config.
 			return nil, "", fmt.Errorf("no config file at %s -- run `snapback init` to create one", configPath)
 		}
 		return nil, "", fmt.Errorf("load config: %w", err)
+	}
+
+	// config.Validate can't check this itself -- config can't import
+	// launchd (launchd already imports config), and this is the one
+	// choke point every subcommand that reads config.yaml goes through.
+	// Without it here, a colliding config (e.g. hand-edited, or written
+	// before this check existed) would only surface when launchd.Sync
+	// happened to run, leaving `run --vm` free to rotate/write two VMs'
+	// logs to the same sanitized path with no error at all (#93).
+	if err := launchd.DetectCollisions(cfg.VMs); err != nil {
+		return nil, "", fmt.Errorf("%s: %w", configPath, err)
 	}
 	return cfg, configPath, nil
 }
