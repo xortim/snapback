@@ -56,12 +56,15 @@ func (r SyncResult) IsEmpty() bool {
 // whether it's newly scheduled, updated, or had its Schedule cleared to
 // "" (which routes it into the removal loop further down, since it's no
 // longer in desiredLabels) -- the real config.VM.Name is available for
-// all of those. The one case still uncovered is a VM removed from vms
-// entirely (`vm remove`): the removal loop only has that VM's
-// *sanitized* launchd label by then, and checking against the sanitized
-// name instead of the real Name would silently never detect a real
-// running state for names that needed sanitizing. That narrower gap is
-// tracked as https://github.com/xortim/snapback/issues/96.
+// all of those. A VM removed from vms entirely (`vm remove`) is also
+// covered, but only because `vm remove` passes its own name through
+// Sync's removedNames parameter explicitly -- the removal loop has no
+// way to recover a real Name from a bare sanitized label on its own.
+// The still-uncovered case is a VM entry deleted by hand directly in
+// config.yaml, followed by `schedule sync`: nothing calling Sync in
+// that path ever knew the deleted VM's real Name, so there's no name to
+// pass as removedNames, and that VM's label falls back to the
+// unconditional-bootout case below (issue #96).
 type RunningChecker func(vmName string) (bool, error)
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM
@@ -80,12 +83,19 @@ type RunningChecker func(vmName string) (bool, error)
 // see ADR-005's Risks for the known gap if the binary is later moved
 // without a resync.
 //
+// removedNames names any VM(s) no longer present in vms at all (e.g.
+// `vm remove <name>`) whose in-progress-backup state should still be
+// checked before their LaunchAgent is torn down, the same as any VM
+// still in vms -- see RunningChecker's Scope limit above for why this
+// can't be recovered from vms itself. Most callers (schedule sync,
+// init, vm add) have nothing to pass here and omit it entirely.
+//
 // If reconciliation fails partway through (an Installer call returns an
 // error after the collision check and Agent-building pass have already
 // succeeded), the returned SyncResult still reflects everything
 // completed before the failure -- it is not zeroed out -- so callers can
 // report partial progress to the user alongside the error.
-func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning RunningChecker) (SyncResult, error) {
+func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning RunningChecker, removedNames ...string) (SyncResult, error) {
 	if err := DetectCollisions(vms); err != nil {
 		return SyncResult{}, err
 	}
@@ -96,9 +106,12 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 	// longer desired), so that case can be running-checked like any other
 	// VM instead of falling into the unconditional-bootout gap that
 	// applies only once a VM is removed from vms entirely.
-	nameByLabel := make(map[string]string, len(vms))
+	nameByLabel := make(map[string]string, len(vms)+len(removedNames))
 	for _, v := range vms {
 		nameByLabel[labelPrefix+sanitizeLabel(v.Name)] = v.Name
+	}
+	for _, name := range removedNames {
+		nameByLabel[labelPrefix+sanitizeLabel(name)] = name
 	}
 
 	var scheduled []Agent
