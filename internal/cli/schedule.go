@@ -67,6 +67,50 @@ func runScheduleSync(cmd *cobra.Command, deps scheduleDeps) error {
 	return syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs)
 }
 
+// persistConfigAndSync validates cfg, marshals and writes it to
+// configPath, then -- if newInstaller is non-nil -- auto-syncs launchd
+// schedules to match. Shared by `vm add`/`vm remove` (vm.go) and `init`
+// (init.go), which all used to duplicate this same
+// marshal/write/auto-sync sequence (#95): a future change to any part of
+// it (e.g. a --no-sync flag, or different error wrapping) had to be
+// applied identically at three call sites, and missing one would
+// silently reintroduce drift in just that command.
+//
+// The collision check runs *before* marshal/write, not after (#92): all
+// three call sites used to write cfg to disk first and only find out
+// about a launchd.DetectCollisions failure once syncSchedules ran,
+// leaving a bad config persisted (and no LaunchAgent installed or
+// updated for any of the colliding VMs) even though the command itself
+// returned a non-zero exit. Validating the in-memory cfg first means a
+// failure here leaves whatever config.yaml already had on disk
+// untouched.
+//
+// syncDestination is forwarded to syncSchedules as-is -- init.go passes
+// a tilde-expanded copy since its cfg comes straight from the wizard
+// rather than through config.Load (see its own call site for why);
+// vm.go's cfg is already expanded by config.Load, so it just passes
+// cfg.Destination.
+func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]byte, error), writeFile func(string, []byte) error, newInstaller func() (launchd.Installer, error), executable func() (string, error), configPath string, cfg *config.Config, syncDestination string) error {
+	if err := launchd.DetectCollisions(cfg.VMs); err != nil {
+		return fmt.Errorf("invalid VM configuration: %w", err)
+	}
+
+	data, err := marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("render config: %w", err)
+	}
+	if err := writeFile(configPath, data); err != nil {
+		return fmt.Errorf("write config: %w", err)
+	}
+
+	if newInstaller != nil {
+		if err := syncSchedules(cmd, newInstaller, executable, syncDestination, cfg.VMs); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // syncSchedules connects to launchd, resolves the running binary's path,
 // runs launchd.Sync, and prints the result -- shared by `schedule sync`
 // and the auto-sync call sites in `vm add`/`vm remove`/`init` so there's

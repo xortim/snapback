@@ -124,18 +124,8 @@ func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 		return fmt.Errorf("invalid VM selection: %w", err)
 	}
 
-	data, err := deps.marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("render config: %w", err)
-	}
-	if err := deps.writeFile(configPath, data); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
-			return err
-		}
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination); err != nil {
+		return err
 	}
 
 	_, err = fmt.Fprintf(out, "added %d VM(s), wrote config to %s\n", len(added), configPath)
@@ -157,7 +147,10 @@ func newVMRemoveCmdWithDeps(deps vmDeps) *cobra.Command {
 }
 
 func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
-	cfg, configPath, err := loadConfigForCmd(cmd, deps.loadConfig)
+	// Skips the sanitized-label collision check that loadConfigForCmd
+	// normally applies -- vm remove is the one command that must still work
+	// on a config already in collision, since it's the recovery path (#97).
+	cfg, configPath, err := loadConfigForCmdSkipCollisionCheck(cmd, deps.loadConfig)
 	if err != nil {
 		return err
 	}
@@ -168,18 +161,8 @@ func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
 	}
 	cfg.VMs = remaining
 
-	data, err := deps.marshal(cfg)
-	if err != nil {
-		return fmt.Errorf("render config: %w", err)
-	}
-	if err := deps.writeFile(configPath, data); err != nil {
-		return fmt.Errorf("write config: %w", err)
-	}
-
-	if deps.newInstaller != nil {
-		if err := syncSchedules(cmd, deps.newInstaller, deps.executable, cfg.Destination, cfg.VMs); err != nil {
-			return err
-		}
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination); err != nil {
+		return err
 	}
 
 	_, err = fmt.Fprintf(cmd.OutOrStdout(), "removed %q, wrote config to %s\n", name, configPath)

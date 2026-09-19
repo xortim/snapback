@@ -244,6 +244,73 @@ func TestSync_VMNoLongerInList_RemovesPlist(t *testing.T) {
 	}
 }
 
+func TestSync_ScheduleCleared_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	bootoutsAfterInstall := len(inst.BootoutCalls)
+
+	vms[0].Schedule = ""
+	stillRunning := func(name string) (bool, error) {
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
+		return true, nil
+	}
+	result, err := Sync(inst, vms, "/bin/snapback", stillRunning)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "dev" {
+		t.Errorf("result.Skipped = %v, want [\"dev\"] -- clearing a schedule mid-backup must not kill it", result.Skipped)
+	}
+	if len(result.Removed) != 0 {
+		t.Errorf("result.Removed = %v, want none while running", result.Removed)
+	}
+	if len(inst.BootoutCalls) != bootoutsAfterInstall || len(inst.RemoveCalls) != 0 {
+		t.Errorf("Bootout/Remove called = %v/%v, want no new Bootout and no Remove while the backup is in progress", inst.BootoutCalls, inst.RemoveCalls)
+	}
+
+	// Once the backup finishes, the deferred removal must still apply.
+	result, err = Sync(inst, vms, "/bin/snapback", neverRunning)
+	if err != nil {
+		t.Fatalf("third Sync() error = %v", err)
+	}
+	if len(result.Removed) != 1 || result.Removed[0] != "com.tim.snapback.dev" {
+		t.Errorf("third Sync() result.Removed = %v, want the plist removed once no longer running", result.Removed)
+	}
+}
+
+func TestSync_VMRemovedFromList_StillRemovesUnconditionally(t *testing.T) {
+	// Documents the known, accepted gap: a VM entirely gone from vms (as
+	// opposed to still present with its schedule cleared) can't be
+	// running-checked here, since only its sanitized label survives --
+	// see RunningChecker's doc comment and issue #96.
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+
+	called := false
+	isRunning := func(string) (bool, error) {
+		called = true
+		return true, nil
+	}
+	result, err := Sync(inst, nil, "/bin/snapback", isRunning)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if called {
+		t.Error("isRunning was called for a VM no longer in vms at all -- only its sanitized label is available, so this must not be checked (see #96)")
+	}
+	if len(result.Removed) != 1 {
+		t.Errorf("result.Removed = %v, want the plist removed unconditionally", result.Removed)
+	}
+}
+
 func TestSync_CollidingNames_ErrorsBeforeWritingAnything(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{

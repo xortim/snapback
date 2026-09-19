@@ -44,6 +44,24 @@ func TestLaunchctlInstaller_WriteThenList(t *testing.T) {
 	}
 }
 
+func TestLaunchctlInstaller_Write_NoLeftoverTempFile(t *testing.T) {
+	dir := t.TempDir()
+	inst := &LaunchctlInstaller{Dir: dir}
+	agent := Agent{Label: "com.tim.snapback.dev", VMName: "dev", BinaryPath: "/bin/snapback", Interval: calendarInterval("daily")}
+
+	if _, _, err := inst.Write(agent); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir() error = %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "com.tim.snapback.dev.plist" {
+		t.Errorf("Dir entries = %v, want exactly [\"com.tim.snapback.dev.plist\"] -- no leftover .tmp file from the atomic write", entries)
+	}
+}
+
 func TestLaunchctlInstaller_Write_UnchangedOnIdenticalContent(t *testing.T) {
 	dir := t.TempDir()
 	inst := &LaunchctlInstaller{Dir: dir}
