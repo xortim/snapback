@@ -90,7 +90,7 @@ func runScheduleSync(cmd *cobra.Command, deps scheduleDeps) error {
 // rather than through config.Load (see its own call site for why);
 // vm.go's cfg is already expanded by config.Load, so it just passes
 // cfg.Destination.
-func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]byte, error), writeFile func(string, []byte) error, newInstaller func() (launchd.Installer, error), executable func() (string, error), configPath string, cfg *config.Config, syncDestination string) error {
+func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]byte, error), writeFile func(string, []byte) error, newInstaller func() (launchd.Installer, error), executable func() (string, error), configPath string, cfg *config.Config, syncDestination string, removedNames ...string) error {
 	if err := launchd.DetectCollisions(cfg.VMs); err != nil {
 		return fmt.Errorf("invalid VM configuration: %w", err)
 	}
@@ -104,7 +104,7 @@ func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]by
 	}
 
 	if newInstaller != nil {
-		if err := syncSchedules(cmd, newInstaller, executable, syncDestination, cfg.VMs); err != nil {
+		if err := syncSchedules(cmd, newInstaller, executable, syncDestination, cfg.VMs, removedNames...); err != nil {
 			return err
 		}
 	}
@@ -117,8 +117,9 @@ func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]by
 // exactly one place that does this, not four. destination is cfg's
 // backup destination, forwarded to backup.IsRunning so Sync can tell
 // whether a VM's scheduled run is currently in progress before tearing
-// down its LaunchAgent.
-func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, error), executable func() (string, error), destination string, vms []config.VM) error {
+// down its LaunchAgent. removedNames is forwarded to launchd.Sync unchanged -- see its doc
+// comment for who has one to pass (currently only vm remove).
+func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, error), executable func() (string, error), destination string, vms []config.VM, removedNames ...string) error {
 	installer, err := newInstaller()
 	if err != nil {
 		return fmt.Errorf("connect to launchd: %w", err)
@@ -132,7 +133,7 @@ func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, e
 		return backup.IsRunning(destination, vmName)
 	}
 
-	result, err := launchd.Sync(installer, vms, binaryPath, isRunning)
+	result, err := launchd.Sync(installer, vms, binaryPath, isRunning, removedNames...)
 	if err != nil {
 		return fmt.Errorf("sync launchd schedules: %w", err)
 	}
