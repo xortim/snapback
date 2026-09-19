@@ -13,6 +13,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/tui"
@@ -480,5 +481,102 @@ func TestVMRemoveCmd_SyncsLaunchdScheduleAfterRemoval(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "nothing to do") {
 		t.Errorf("stdout = %q, want \"nothing to do\" -- the removed VM was never bootstrapped by this fake installer, so there's nothing to boot out", out.String())
+	}
+}
+
+func TestVMRemoveCmd_SkipsLaunchdBootoutWhenBackupRunning(t *testing.T) {
+	dest := t.TempDir()
+	inst := launchd.NewFakeInstaller()
+	seedVMs := []config.VM{{Name: "remove-me", VMX: "/vms/remove.vmx", Schedule: "daily"}}
+	if _, err := launchd.Sync(inst, seedVMs, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	lock, err := backup.AcquireLock(dest, "remove-me")
+	if err != nil {
+		t.Fatalf("AcquireLock() error = %v, want nil", err)
+	}
+	defer func() { _ = lock.Release() }()
+
+	var written []byte
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: dest,
+				VMs:         []config.VM{{Name: "keep-me", VMX: "/vms/keep.vmx"}, {Name: "remove-me", VMX: "/vms/remove.vmx", Schedule: "daily"}},
+			}, nil
+		},
+		marshal: config.Marshal,
+		writeFile: func(_ string, data []byte) error {
+			written = data
+			return nil
+		},
+		newInstaller: func() (launchd.Installer, error) { return inst, nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "remove", "remove-me", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.Contains(string(written), "remove-me") {
+		t.Errorf("written config = %q, want \"remove-me\" gone even though its LaunchAgent removal was skipped", written)
+	}
+	if !strings.Contains(out.String(), "skipped: remove-me") {
+		t.Errorf("stdout = %q, want \"skipped: remove-me\" -- removing a VM mid-backup must not kill its in-flight run (#96)", out.String())
+	}
+	label := "com.tim.snapback.remove-me"
+	for _, l := range inst.RemoveCalls {
+		if l == label {
+			t.Errorf("RemoveCalls = %v, want %q's LaunchAgent left loaded while its backup is running", inst.RemoveCalls, label)
+		}
+	}
+}
+
+func TestVMRemoveCmd_RemovesLaunchdScheduleWhenNotRunning(t *testing.T) {
+	dest := t.TempDir()
+	inst := launchd.NewFakeInstaller()
+	seedVMs := []config.VM{{Name: "remove-me", VMX: "/vms/remove.vmx", Schedule: "daily"}}
+	if _, err := launchd.Sync(inst, seedVMs, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	deps := vmDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: dest,
+				VMs:         []config.VM{{Name: "remove-me", VMX: "/vms/remove.vmx", Schedule: "daily"}},
+			}, nil
+		},
+		marshal:      config.Marshal,
+		writeFile:    func(string, []byte) error { return nil },
+		newInstaller: func() (launchd.Installer, error) { return inst, nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
+	}
+	root := newTestRootForVM(t, deps)
+	root.SetArgs([]string{"vm", "remove", "remove-me", "--config", "/cfg/config.yaml"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&bytes.Buffer{})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !strings.Contains(out.String(), "removed: remove-me") {
+		t.Errorf("stdout = %q, want \"removed: remove-me\" -- proves isRunning was actually consulted (and found nothing) for the removed VM's real name, not just skipped by omission", out.String())
+	}
+	label := "com.tim.snapback.remove-me"
+	found := false
+	for _, l := range inst.RemoveCalls {
+		if l == label {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("RemoveCalls = %v, want %q removed once confirmed not running", inst.RemoveCalls, label)
 	}
 }
