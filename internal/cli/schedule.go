@@ -117,7 +117,9 @@ func persistConfigAndSync(cmd *cobra.Command, marshal func(*config.Config) ([]by
 // exactly one place that does this, not four. destination is cfg's
 // backup destination, forwarded to backup.IsRunning so Sync can tell
 // whether a VM's scheduled run is currently in progress before tearing
-// down its LaunchAgent. removedNames is forwarded to launchd.Sync unchanged -- see its doc
+// down its LaunchAgent.
+//
+// removedNames is forwarded to launchd.Sync unchanged -- see its doc
 // comment for who has one to pass (currently only vm remove).
 func syncSchedules(cmd *cobra.Command, newInstaller func() (launchd.Installer, error), executable func() (string, error), destination string, vms []config.VM, removedNames ...string) error {
 	installer, err := newInstaller()
@@ -160,11 +162,11 @@ func printSyncResult(out io.Writer, result launchd.SyncResult) error {
 			return err
 		}
 	}
-	// Removed holds raw launchd labels, not VM names (by then the VM is
-	// gone from config, so there's no name left to report) -- strip the
-	// reverse-DNS prefix so this reads like the two lines above it, and
-	// doesn't restate `vm remove foo`'s own message in a different
-	// vocabulary.
+	// Removed holds raw launchd labels, not VM names -- SyncResult
+	// doesn't carry the name back out even when the caller supplied one
+	// via removedNames (vm remove) -- strip the reverse-DNS prefix so
+	// this reads like the two lines above it, and doesn't restate
+	// `vm remove foo`'s own message in a different vocabulary.
 	for _, label := range result.Removed {
 		if _, err := fmt.Fprintf(out, "removed: %s\n", launchd.ShortLabel(label)); err != nil {
 			return err

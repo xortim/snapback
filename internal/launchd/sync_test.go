@@ -381,6 +381,37 @@ func TestSync_RemovedVMName_ProceedsWhenNotRunning(t *testing.T) {
 	}
 }
 
+func TestSync_RemovedVMName_DoesNotOverwriteStillConfiguredCollidingName(t *testing.T) {
+	// "My VM!" and "My VM?" sanitize to the identical label
+	// ("com.tim.snapback.my-vm", see TestSync_CollidingNames_ErrorsBeforeWritingAnything).
+	// vm remove skips the collision check on load (#97's recovery path),
+	// so removing "My VM?" from a config that still has "My VM!" is
+	// possible even though they collide. If removedNames were allowed to
+	// overwrite nameByLabel, the removal loop would running-check the
+	// WRONG VM ("My VM?", already gone) instead of the real survivor
+	// ("My VM!") when deciding whether it's safe to touch that shared
+	// label -- a false negative that could kill "My VM!"'s live backup.
+	inst := NewFakeInstaller()
+	if _, err := Sync(inst, []config.VM{{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: "daily"}}, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	var gotName string
+	isRunning := func(name string) (bool, error) {
+		gotName = name
+		return false, nil
+	}
+	// "My VM!" is still configured but its schedule was cleared to "" --
+	// routes it (and the colliding removed name) into the removal loop.
+	vms := []config.VM{{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: ""}}
+	if _, err := Sync(inst, vms, "/bin/snapback", isRunning, "My VM?"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if gotName != "My VM!" {
+		t.Errorf("isRunning called with %q, want the still-configured survivor %q, not the removed colliding name", gotName, "My VM!")
+	}
+}
+
 func TestSync_CollidingNames_ErrorsBeforeWritingAnything(t *testing.T) {
 	inst := NewFakeInstaller()
 	vms := []config.VM{

@@ -60,11 +60,15 @@ func (r SyncResult) IsEmpty() bool {
 // covered, but only because `vm remove` passes its own name through
 // Sync's removedNames parameter explicitly -- the removal loop has no
 // way to recover a real Name from a bare sanitized label on its own.
-// The still-uncovered case is a VM entry deleted by hand directly in
-// config.yaml, followed by `schedule sync`: nothing calling Sync in
-// that path ever knew the deleted VM's real Name, so there's no name to
-// pass as removedNames, and that VM's label falls back to the
-// unconditional-bootout case below (issue #96).
+// Two paths still fall back to the unconditional-bootout case below:
+// a VM entry deleted by hand directly in config.yaml, followed by
+// `schedule sync` (nothing calling Sync in that path ever knew the
+// deleted VM's real Name, so there's no name to pass as removedNames);
+// and `init --force` dropping a previously-scheduled VM that discovery
+// didn't carry forward -- its real Name is known and confirmed with the
+// operator (internal/tui/init.go's confirmUnmatchedPriorSchedules), but
+// runInit does not yet thread it through as a removedNames argument.
+// Both remain tracked under issue #96.
 type RunningChecker func(vmName string) (bool, error)
 
 // Sync reconciles installer's on-disk/loaded state with vms: every VM
@@ -100,18 +104,23 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 		return SyncResult{}, err
 	}
 
-	// nameByLabel covers every VM still in vms, scheduled or not -- used
-	// by the removal loop below to recover the real config.VM.Name for a
-	// VM whose schedule was just cleared to "" (still configured, just no
-	// longer desired), so that case can be running-checked like any other
-	// VM instead of falling into the unconditional-bootout gap that
-	// applies only once a VM is removed from vms entirely.
+	// nameByLabel covers every VM still in vms, scheduled or not, plus
+	// any name supplied via removedNames -- used by the removal loop
+	// below to recover the real config.VM.Name for a VM whose schedule
+	// was just cleared to "" (still configured, just no longer desired)
+	// or whose caller (e.g. vm remove) already knows its name despite it
+	// being gone from vms entirely, so both cases can be running-checked
+	// like any other VM instead of falling into the unconditional-
+	// bootout gap that applies only when no name is available at all.
 	nameByLabel := make(map[string]string, len(vms)+len(removedNames))
 	for _, v := range vms {
 		nameByLabel[labelPrefix+sanitizeLabel(v.Name)] = v.Name
 	}
 	for _, name := range removedNames {
-		nameByLabel[labelPrefix+sanitizeLabel(name)] = name
+		label := labelPrefix + sanitizeLabel(name)
+		if _, ok := nameByLabel[label]; !ok {
+			nameByLabel[label] = name
+		}
 	}
 
 	var scheduled []Agent
@@ -208,11 +217,12 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 			continue
 		}
 
-		// vmName is only set for a VM still present in vms (its schedule
-		// was cleared to "", not removed from config entirely) -- see
-		// nameByLabel's doc comment and RunningChecker's Scope limit
-		// above for why a VM removed from vms entirely can't be checked
-		// here.
+		// vmName is set for a VM still present in vms (schedule cleared
+		// to "") or one whose real name the caller supplied via
+		// removedNames (e.g. vm remove) -- see nameByLabel's doc comment
+		// and RunningChecker's Scope limit above. It's absent only when
+		// nothing in the call path ever knew the real Name at all (a
+		// hand-edited config.yaml followed by `schedule sync`).
 		if vmName, ok := nameByLabel[label]; ok {
 			running, err := isRunning(vmName)
 			if err != nil {

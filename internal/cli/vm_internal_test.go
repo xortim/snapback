@@ -567,7 +567,7 @@ func TestVMRemoveCmd_RemovesLaunchdScheduleWhenNotRunning(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if !strings.Contains(out.String(), "removed: remove-me") {
-		t.Errorf("stdout = %q, want \"removed: remove-me\" -- proves isRunning was actually consulted (and found nothing) for the removed VM's real name, not just skipped by omission", out.String())
+		t.Errorf("stdout = %q, want \"removed: remove-me\" -- pins the happy path: a removed VM with no backup in flight still gets its LaunchAgent torn down", out.String())
 	}
 	label := "com.tim.snapback.remove-me"
 	found := false
