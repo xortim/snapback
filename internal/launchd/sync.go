@@ -118,6 +118,9 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 	}
 	for _, name := range removedNames {
 		label := labelPrefix + sanitizeLabel(name)
+		// vms always wins a sanitized-label collision: a removed name must
+		// never overwrite a still-configured VM's entry, or the removal
+		// loop would running-check (and potentially bootout) the wrong VM.
 		if _, ok := nameByLabel[label]; !ok {
 			nameByLabel[label] = name
 		}
