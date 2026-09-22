@@ -132,41 +132,23 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 
 	out := cmd.OutOrStdout()
 
-	if deps.isTerminal != nil && deps.isTerminal(out) && deps.runInteractive != nil {
-		ctx, cancel := context.WithCancel(cmd.Context())
-		defer cancel()
-		backupFn := func(r progress.Reporter) (*backup.Result, error) {
+	// The TUI already rendered its own "error: <err>" line by the time
+	// interactive returns -- except for tui.ErrInteractiveRunIncomplete,
+	// where the program exited before ever rendering that line. dispatchRun
+	// silences cobra's own default error print in the normal case (without
+	// this, a failed interactive run shows the same error twice), but
+	// leaves it enabled for the incomplete case so the user sees *some*
+	// message instead of a silent exit 1. This doesn't affect the exit
+	// code: cmd/snapback/main.go only checks whether err != nil.
+	return dispatchRun(cmd, out, deps.isTerminal, deps.runInteractive, vmName,
+		func(ctx context.Context, r progress.Reporter) (*backup.Result, error) {
 			return backup.Run(ctx, ctrl, r, opts)
-		}
-		_, err := deps.runInteractive(out, vmName, cancel, backupFn)
-		if err != nil {
-			// The TUI already rendered its own "error: <err>" line before
-			// returning here -- except for tui.ErrInteractiveRunIncomplete,
-			// where the program exited before ever rendering that line.
-			// Silence cobra's own default error print in the normal case
-			// (without this, a failed interactive run shows the same error
-			// twice), but leave it enabled for the incomplete case so the
-			// user sees *some* message instead of a silent exit 1. This
-			// doesn't affect the exit code: cmd/snapback/main.go only
-			// checks whether err != nil.
-			if !errors.Is(err, tui.ErrInteractiveRunIncomplete) {
-				cmd.SilenceErrors = true
-			}
-			warnIfMaybeOrphaned(cmd, vmName, err)
-			return err
-		}
-		return nil
-	}
-
-	reporter := progress.NewTerminalReporter(out)
-	result, err := backup.Run(cmd.Context(), ctrl, reporter, opts)
-	if err != nil {
-		warnIfMaybeOrphaned(cmd, vmName, err)
-		return err
-	}
-
-	_, _ = fmt.Fprintf(out, "backup complete: %s\n", result.ArchivePath)
-	return nil
+		},
+		func(err error) { warnIfMaybeOrphaned(cmd, vmName, err) },
+		func(result *backup.Result) {
+			_, _ = fmt.Fprintf(out, "backup complete: %s\n", result.ArchivePath)
+		},
+	)
 }
 
 // warnIfMaybeOrphaned prints a pointer to `snapback cleanup` on stderr
