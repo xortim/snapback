@@ -283,11 +283,12 @@ func TestSync_ScheduleCleared_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
 	}
 }
 
-func TestSync_VMRemovedFromList_StillRemovesUnconditionally(t *testing.T) {
-	// Documents the known, accepted gap: a VM entirely gone from vms (as
-	// opposed to still present with its schedule cleared) can't be
-	// running-checked here, since only its sanitized label survives --
-	// see RunningChecker's doc comment and issue #96.
+func TestSync_VMRemovedFromList_NoNameSupplied_StillRemovesUnconditionally(t *testing.T) {
+	// Documents the remaining, accepted gap: a VM entirely gone from vms
+	// with no removedNames entry either (e.g. config.yaml hand-edited to
+	// delete the VM, then `schedule sync` run) can't be running-checked --
+	// only its sanitized label survives, and nothing in that path ever
+	// knew its real Name. See RunningChecker's doc comment and issue #96.
 	inst := NewFakeInstaller()
 	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
 	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
@@ -304,10 +305,110 @@ func TestSync_VMRemovedFromList_StillRemovesUnconditionally(t *testing.T) {
 		t.Fatalf("second Sync() error = %v", err)
 	}
 	if called {
-		t.Error("isRunning was called for a VM no longer in vms at all -- only its sanitized label is available, so this must not be checked (see #96)")
+		t.Error("isRunning was called for a VM no longer in vms with no removedNames supplied -- only its sanitized label is available, so this must not be checked (see #96)")
 	}
 	if len(result.Removed) != 1 {
 		t.Errorf("result.Removed = %v, want the plist removed unconditionally", result.Removed)
+	}
+}
+
+func TestSync_RemovedVMName_HonorsRunningCheckBeforeBootout(t *testing.T) {
+	// vm remove passes the removed VM's real name via removedNames --
+	// Sync must running-check it exactly like a VM whose schedule was
+	// merely cleared to "", instead of falling into the unconditional
+	// bootout that applies when no name is available at all (#96).
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	bootoutsAfterInstall := len(inst.BootoutCalls)
+
+	stillRunning := func(name string) (bool, error) {
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
+		return true, nil
+	}
+	result, err := Sync(inst, nil, "/bin/snapback", stillRunning, "dev")
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "dev" {
+		t.Errorf("result.Skipped = %v, want [\"dev\"] -- removing a VM mid-backup must not kill it", result.Skipped)
+	}
+	if len(result.Removed) != 0 {
+		t.Errorf("result.Removed = %v, want none while running", result.Removed)
+	}
+	if len(inst.BootoutCalls) != bootoutsAfterInstall || len(inst.RemoveCalls) != 0 {
+		t.Errorf("Bootout/Remove called = %v/%v, want no new Bootout and no Remove while the backup is in progress", inst.BootoutCalls, inst.RemoveCalls)
+	}
+
+	// Once the backup finishes, the deferred removal must still apply.
+	result, err = Sync(inst, nil, "/bin/snapback", neverRunning, "dev")
+	if err != nil {
+		t.Fatalf("third Sync() error = %v", err)
+	}
+	if len(result.Removed) != 1 || result.Removed[0] != "com.tim.snapback.dev" {
+		t.Errorf("third Sync() result.Removed = %v, want the plist removed once no longer running", result.Removed)
+	}
+}
+
+func TestSync_RemovedVMName_ProceedsWhenNotRunning(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+
+	called := false
+	isRunning := func(name string) (bool, error) {
+		called = true
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
+		return false, nil
+	}
+	result, err := Sync(inst, nil, "/bin/snapback", isRunning, "dev")
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if !called {
+		t.Error("isRunning was not called for a removed VM whose name was supplied via removedNames")
+	}
+	if len(result.Removed) != 1 || result.Removed[0] != "com.tim.snapback.dev" {
+		t.Errorf("result.Removed = %v, want the plist removed", result.Removed)
+	}
+}
+
+func TestSync_RemovedVMName_DoesNotOverwriteStillConfiguredCollidingName(t *testing.T) {
+	// "My VM!" and "My VM?" sanitize to the identical label
+	// ("com.tim.snapback.my-vm", see TestSync_CollidingNames_ErrorsBeforeWritingAnything).
+	// vm remove skips the collision check on load (#97's recovery path),
+	// so removing "My VM?" from a config that still has "My VM!" is
+	// possible even though they collide. If removedNames were allowed to
+	// overwrite nameByLabel, the removal loop would running-check the
+	// WRONG VM ("My VM?", already gone) instead of the real survivor
+	// ("My VM!") when deciding whether it's safe to touch that shared
+	// label -- a false negative that could kill "My VM!"'s live backup.
+	inst := NewFakeInstaller()
+	if _, err := Sync(inst, []config.VM{{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: "daily"}}, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+
+	var gotName string
+	isRunning := func(name string) (bool, error) {
+		gotName = name
+		return false, nil
+	}
+	// "My VM!" is still configured but its schedule was cleared to "" --
+	// routes it (and the colliding removed name) into the removal loop.
+	vms := []config.VM{{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: ""}}
+	if _, err := Sync(inst, vms, "/bin/snapback", isRunning, "My VM?"); err != nil {
+		t.Fatalf("Sync() error = %v", err)
+	}
+	if gotName != "My VM!" {
+		t.Errorf("isRunning called with %q, want the still-configured survivor %q, not the removed colliding name", gotName, "My VM!")
 	}
 }
 

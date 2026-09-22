@@ -161,7 +161,7 @@ func runVMRemove(cmd *cobra.Command, deps vmDeps, name string) error {
 	}
 	cfg.VMs = remaining
 
-	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination); err != nil {
+	if err := persistConfigAndSync(cmd, deps.marshal, deps.writeFile, deps.newInstaller, deps.executable, configPath, cfg, cfg.Destination, name); err != nil {
 		return err
 	}
 
