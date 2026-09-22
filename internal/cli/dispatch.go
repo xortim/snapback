@@ -39,21 +39,24 @@ func dispatchRun[R any](
 	onError func(err error),
 	onSuccess func(result R),
 ) error {
-	if isTerminal != nil && isTerminal(out) && interactive != nil {
+	fail := func(err error) error {
+		if onError != nil {
+			onError(err)
+		}
+		return err
+	}
+
+	if isTerminalWriter(isTerminal, out) && interactive != nil {
 		ctx, cancel := context.WithCancel(cmd.Context())
 		defer cancel()
 		fn := func(r progress.Reporter) (R, error) {
 			return runFn(ctx, r)
 		}
-		_, err := interactive(out, label, cancel, fn)
-		if err != nil {
+		if _, err := interactive(out, label, cancel, fn); err != nil {
 			if !errors.Is(err, tui.ErrInteractiveRunIncomplete) {
 				cmd.SilenceErrors = true
 			}
-			if onError != nil {
-				onError(err)
-			}
-			return err
+			return fail(err)
 		}
 		return nil
 	}
@@ -61,14 +64,25 @@ func dispatchRun[R any](
 	reporter := progress.NewTerminalReporter(out)
 	result, err := runFn(cmd.Context(), reporter)
 	if err != nil {
-		if onError != nil {
-			onError(err)
-		}
-		return err
+		return fail(err)
 	}
 
 	if onSuccess != nil {
 		onSuccess(result)
 	}
 	return nil
+}
+
+// isTerminalWriter reports whether fn is non-nil and reports w as a real
+// terminal -- the nil-guarded-call idiom shared with vm.go and init.go,
+// which check the same thing for their own out/in pair before deciding
+// whether the accessible (non-interactive) path is required.
+func isTerminalWriter(fn func(w io.Writer) bool, w io.Writer) bool {
+	return fn != nil && fn(w)
+}
+
+// isTerminalReader is isTerminalWriter's read-side counterpart, for the
+// isTerminalIn func(io.Reader) bool dependencies (init.go, vm.go).
+func isTerminalReader(fn func(r io.Reader) bool, r io.Reader) bool {
+	return fn != nil && fn(r)
 }
