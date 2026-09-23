@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
@@ -148,31 +147,16 @@ func restoreArchive(cmd *cobra.Command, deps restoreDeps, archiveID, vmName stri
 
 	out := cmd.OutOrStdout()
 
-	if deps.isTerminal != nil && deps.isTerminal(out) && deps.restoreInteractive != nil {
-		ctx, cancel := context.WithCancel(cmd.Context())
-		defer cancel()
-		restoreFn := func(r progress.Reporter) (*backup.RestoreResult, error) {
+	return dispatchRun(cmd, out, deps.isTerminal, deps.restoreInteractive, label,
+		func(ctx context.Context, r progress.Reporter) (*backup.RestoreResult, error) {
 			return backup.Restore(ctx, ctrl, r, opts)
-		}
-		_, err := deps.restoreInteractive(out, label, cancel, restoreFn)
-		if err != nil {
-			if !errors.Is(err, tui.ErrInteractiveRunIncomplete) {
-				cmd.SilenceErrors = true
+		},
+		nil,
+		func(result *backup.RestoreResult) {
+			_, _ = fmt.Fprintf(out, "%s\n", result.Summary())
+			if next := result.NextSteps(); next != "" {
+				_, _ = fmt.Fprintf(out, "%s\n", next)
 			}
-			return err
-		}
-		return nil
-	}
-
-	reporter := progress.NewTerminalReporter(out)
-	result, err := backup.Restore(cmd.Context(), ctrl, reporter, opts)
-	if err != nil {
-		return err
-	}
-
-	_, _ = fmt.Fprintf(out, "%s\n", result.Summary())
-	if next := result.NextSteps(); next != "" {
-		_, _ = fmt.Fprintf(out, "%s\n", next)
-	}
-	return nil
+		},
+	)
 }

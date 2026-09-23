@@ -15,6 +15,7 @@ import (
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -245,5 +246,39 @@ func TestRestoreCmd_InteractiveTerminal_UsesRestoreInteractiveAndSkipsPlainPrint
 	}
 	if strings.Contains(out.String(), "restore complete:") {
 		t.Errorf("stdout = %q, want no plain \"restore complete\" line -- the interactive renderer owns that", out.String())
+	}
+}
+
+// TestRestoreCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError mirrors
+// TestRunCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError in
+// run_internal_test.go -- both go through dispatchRun (see #79), so this
+// characterizes that restore gets the same tui.ErrInteractiveRunIncomplete
+// handling run does: cmd.SilenceErrors must NOT be set, or cobra's default
+// "Error: ..." print is suppressed and the run fails with no message at all.
+func TestRestoreCmd_InteractiveTerminal_IncompleteRun_StillPrintsAnError(t *testing.T) {
+	destination := t.TempDir()
+	archiveID := writeFixtureArchive(t, destination, "myvm")
+	dest := t.TempDir()
+
+	root := newTestRestoreRoot(t, restoreDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: destination}, nil
+		},
+		newController: func() (vm.Controller, error) { return vm.NewFakeVMController(), nil },
+		isTerminal:    func(io.Writer) bool { return true },
+		restoreInteractive: func(out io.Writer, label string, cancel context.CancelFunc, restoreFn func(progress.Reporter) (*backup.RestoreResult, error)) (*backup.RestoreResult, error) {
+			return nil, tui.ErrInteractiveRunIncomplete
+		},
+	})
+	root.SetArgs([]string{"restore", archiveID, "--dest", dest})
+	var out, errOut bytes.Buffer
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want ErrInteractiveRunIncomplete")
+	}
+	if !strings.Contains(errOut.String(), "interactive run ended before the backup finished") {
+		t.Errorf("stderr = %q, want cobra's own error line since the TUI never rendered one", errOut.String())
 	}
 }

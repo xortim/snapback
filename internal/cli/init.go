@@ -144,8 +144,8 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 	// but stdin is a redirected file -- means the rich interactive path
 	// can't work, so accessible mode is the safe default whenever either
 	// check comes back false or unset.
-	outIsTerminal := deps.isTerminal != nil && deps.isTerminal(out)
-	inIsTerminal := deps.isTerminalIn != nil && deps.isTerminalIn(in)
+	outIsTerminal := isTerminalWriter(deps.isTerminal, out)
+	inIsTerminal := isTerminalReader(deps.isTerminalIn, in)
 	accessible := !outIsTerminal || !inIsTerminal
 
 	cfg, err := deps.runWizard(cmd.Context(), in, out, accessible, tuiCandidates, prior)

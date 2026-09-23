@@ -106,8 +106,8 @@ func runVMAdd(cmd *cobra.Command, deps vmDeps, extraSearchDirs []string) error {
 
 	out := cmd.OutOrStdout()
 	in := cmd.InOrStdin()
-	outIsTerminal := deps.isTerminal != nil && deps.isTerminal(out)
-	inIsTerminal := deps.isTerminalIn != nil && deps.isTerminalIn(in)
+	outIsTerminal := isTerminalWriter(deps.isTerminal, out)
+	inIsTerminal := isTerminalReader(deps.isTerminalIn, in)
 	accessible := !outIsTerminal || !inIsTerminal
 
 	added, err := deps.addVMs(cmd.Context(), in, out, accessible, tuiCandidates)
