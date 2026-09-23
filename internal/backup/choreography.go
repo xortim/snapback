@@ -382,7 +382,24 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 	reporter.Report(progress.Event{Stage: progress.Compressing, Message: "compressing archive"})
 	tempArchivePath := filepath.Join(outputDir, "archive.tmp")
+	// archivedBytes ends up holding the exact number of regular-file bytes
+	// createArchive wrote into the tar -- onRead is invoked with the running
+	// cumulative total, so the last value it sees is the final one.
+	//
+	// That, not totalBytes, is what the manifest records as ground truth for
+	// restore's decompression cap: totalBytes was measured before
+	// ctrl.Snapshot() ran, and a real VMware snapshot then adds delta disks
+	// ("-00000N.vmdk"), a .vmsn state file, and vmware.log growth to the
+	// bundle -- all of which the later staged copy, and therefore the tar,
+	// carries. So totalBytes is systematically *smaller* than what actually
+	// gets archived on a real VM (the same inequality percentOf's doc comment
+	// describes). Progress reporting tolerates that, clamping at 1.0; a hard
+	// cap does not -- it would abort a restore of a perfectly good backup.
+	// archivedBytes also excludes "*.lck" directories exactly as tarTo does,
+	// matching what extraction re-produces byte for byte.
+	var archivedBytes int64
 	onRead := func(cumulativeBytes int64) {
+		archivedBytes = cumulativeBytes
 		reporter.Report(progress.Event{Stage: progress.Compressing, Percent: percentOf(cumulativeBytes, totalBytes)})
 	}
 	usedCompression, err := createArchive(stagingRoot, tempArchivePath, opts.Compression, onRead)
@@ -417,7 +434,7 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		ToolsState:            toolsState,
 		SHA256:                sum,
 		Compression:           usedCompression,
-		UncompressedSizeBytes: totalBytes,
+		UncompressedSizeBytes: archivedBytes,
 	}
 	manifestPath := filepath.Join(outputDir, "manifest.json")
 	if err := writeManifest(manifestPath, manifest); err != nil {
