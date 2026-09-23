@@ -499,14 +499,29 @@ func TestExtractArchive_DecompressionExceedsExpectedSize_ReturnsError(t *testing
 	if err == nil {
 		t.Fatal("extractArchive() error = nil, want an error for exceeding expected uncompressed size")
 	}
+	// The cap must abort mid-copy, not after writing the whole 256KB
+	// payload -- that's the whole point of checking incrementally rather
+	// than comparing sizes afterward. os.ReadDir is non-recursive, which
+	// suffices for this fixture's single flat file.
 	if _, statErr := os.Stat(destDir); statErr == nil {
-		entries, _ := os.ReadDir(destDir)
+		entries, readErr := os.ReadDir(destDir)
+		if readErr != nil {
+			t.Fatalf("ReadDir(destDir): %v", readErr)
+		}
 		var total int64
 		for _, e := range entries {
-			info, _ := e.Info()
-			if info != nil {
-				total += info.Size()
+			info, infoErr := e.Info()
+			if infoErr != nil {
+				t.Fatalf("Info(%s): %v", e.Name(), infoErr)
 			}
+			total += info.Size()
+		}
+		// 100 (the expected size passed above) + the slack + one tar block
+		// of margin, covering the single-byte overshoot copyCapped
+		// deliberately permits to detect the overrun.
+		const wantMax = 100 + decompressionSlackBytes + 512
+		if total > wantMax {
+			t.Errorf("extraction wrote %d bytes to %s, want <= %d -- the cap must abort mid-copy, not after writing the full %d-byte payload", total, destDir, wantMax, len(payload))
 		}
 	}
 }
@@ -573,17 +588,5 @@ func TestExtractArchive_FallbackCap_NoExpectedSize_StillCatchesBomb(t *testing.T
 	destDir := filepath.Join(t.TempDir(), "extracted")
 	if err := extractArchive(archivePath, destDir, "gzip", 0, nil); err == nil {
 		t.Fatal("extractArchive() error = nil, want an error from the fallback cap")
-	}
-}
-
-func TestDecompressionCapConstants(t *testing.T) {
-	// Verify the decompression cap constants have their expected values.
-	// These constants are used by Task 3 to cap decompression size;
-	// this test ensures they're defined and have sensible bounds.
-	if fallbackDecompressionMultiplier != 500 {
-		t.Errorf("fallbackDecompressionMultiplier = %d, want 500", fallbackDecompressionMultiplier)
-	}
-	if decompressionSlackBytes != 64*1024 {
-		t.Errorf("decompressionSlackBytes = %d, want %d", decompressionSlackBytes, 64*1024)
 	}
 }

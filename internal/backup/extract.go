@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -21,17 +22,28 @@ const (
 	// zero-filled regions can legitimately compress at very high ratios,
 	// and this is a last-resort guard against a truly pathological
 	// expansion, not a tight bound.
+	//
+	// Note how little this does for a gzip archive specifically: deflate
+	// caps a back-reference's match length at 258 bytes, so its compression
+	// ratio on the highly repetitive (RLE-style) data an archive bomb is
+	// built from asymptotes at roughly 510:1. A 500x multiplier therefore
+	// only trips on a gzip archive compressed at very nearly that
+	// theoretical ceiling. It earns its keep for zstd, which reaches far
+	// higher ratios on constant data -- don't read the gzip path as
+	// meaningfully bounded by this.
 	fallbackDecompressionMultiplier = 500
 
 	// decompressionSlackBytes is added on top of a manifest's recorded
 	// UncompressedSizeBytes to get the real cap. It's not a
-	// compression-ratio guess -- it accounts for dirSize (measured at
-	// backup time, before createArchive runs) including the Fusion
-	// "*.lck" lock directories that createArchive then excludes from the
-	// tar (see the 2026-09-11 incident note in CLAUDE.md), plus tar's
-	// per-entry 512-byte header rounding. A real .vmwarevm bundle has a
-	// handful of files, not thousands, so this is generous relative to
-	// that overhead.
+	// compression-ratio guess, and it isn't compensating for any known
+	// systematic gap either: UncompressedSizeBytes is counted at tar time
+	// from the same regular-file bytes, with the same "*.lck" exclusion,
+	// that extraction re-produces, so the two should agree exactly. This is
+	// plain defensive headroom for the rounding and per-entry bookkeeping
+	// around that equality (tar's 512-byte header/padding granularity, a
+	// manifest written by some future createArchive variant that counts
+	// marginally differently). A real .vmwarevm bundle has a handful of
+	// files, not thousands, so this is generous relative to that overhead.
 	decompressionSlackBytes = 64 * 1024
 )
 
@@ -85,7 +97,15 @@ func extractArchive(srcPath, destDir, compression string, expectedUncompressedBy
 	}
 	defer func() { _ = in.Close() }()
 
-	maxBytes := expectedUncompressedBytes + decompressionSlackBytes
+	// Clamped rather than added blindly: expectedUncompressedBytes comes
+	// from a manifest.json on disk, so a corrupt or tampered one carrying a
+	// value near math.MaxInt64 would wrap the sum negative. Extraction would
+	// still abort (the first entry immediately exceeds a negative budget),
+	// but the error would quote a nonsensical negative byte count.
+	maxBytes := int64(math.MaxInt64)
+	if expectedUncompressedBytes <= math.MaxInt64-decompressionSlackBytes {
+		maxBytes = expectedUncompressedBytes + decompressionSlackBytes
+	}
 	if expectedUncompressedBytes <= 0 {
 		info, err := in.Stat()
 		if err != nil {
