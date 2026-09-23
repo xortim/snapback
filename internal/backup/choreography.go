@@ -410,13 +410,14 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 
 	manifest := Manifest{
-		VMName:      opts.VMName,
-		GuestOS:     guestOS,
-		SizeBytes:   info.Size(),
-		Timestamp:   startTime,
-		ToolsState:  toolsState,
-		SHA256:      sum,
-		Compression: usedCompression,
+		VMName:                opts.VMName,
+		GuestOS:               guestOS,
+		SizeBytes:             info.Size(),
+		Timestamp:             startTime,
+		ToolsState:            toolsState,
+		SHA256:                sum,
+		Compression:           usedCompression,
+		UncompressedSizeBytes: totalBytes,
 	}
 	manifestPath := filepath.Join(outputDir, "manifest.json")
 	if err := writeManifest(manifestPath, manifest); err != nil {

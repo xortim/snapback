@@ -74,6 +74,9 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	if result.Manifest.SizeBytes == 0 {
 		t.Error("Manifest.SizeBytes = 0, want > 0")
 	}
+	if result.Manifest.UncompressedSizeBytes == 0 {
+		t.Error("Manifest.UncompressedSizeBytes = 0, want > 0")
+	}
 	if !result.Manifest.Timestamp.Equal(fixedNow) {
 		t.Errorf("Manifest.Timestamp = %v, want %v", result.Manifest.Timestamp, fixedNow)
 	}
@@ -113,7 +116,8 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 		!onDiskManifest.Timestamp.Equal(result.Manifest.Timestamp) ||
 		onDiskManifest.ToolsState != result.Manifest.ToolsState ||
 		onDiskManifest.SHA256 != result.Manifest.SHA256 ||
-		onDiskManifest.Compression != result.Manifest.Compression {
+		onDiskManifest.Compression != result.Manifest.Compression ||
+		onDiskManifest.UncompressedSizeBytes != result.Manifest.UncompressedSizeBytes {
 		t.Errorf("manifest.json on disk = %+v, want %+v", onDiskManifest, result.Manifest)
 	}
 

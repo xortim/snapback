@@ -24,6 +24,15 @@ type Manifest struct {
 	ToolsState  vm.ToolsState `json:"tools_state"`
 	SHA256      string        `json:"sha256"`
 	Compression string        `json:"compression"`
+	// UncompressedSizeBytes is the real, measured size of the .vmwarevm
+	// bundle at archive time (Run's totalBytes, from dirSize) -- ground
+	// truth for how large extraction should be, used by restore's
+	// decompression cap (extract.go) instead of guessing from the
+	// compressed archive size and a ratio, since VM disks can legitimately
+	// compress at very high ratios. Zero on a manifest written before this
+	// field existed; extractArchive falls back to a multiplier-based cap
+	// in that case.
+	UncompressedSizeBytes int64 `json:"uncompressed_size_bytes"`
 }
 
 // writeManifest marshals m as indented JSON to path.
