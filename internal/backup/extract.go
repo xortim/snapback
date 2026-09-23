@@ -12,6 +12,51 @@ import (
 	"strings"
 )
 
+const (
+	// fallbackDecompressionMultiplier bounds total decompressed bytes as a
+	// multiple of the compressed archive's on-disk size, used only when
+	// the archive's manifest predates Manifest.UncompressedSizeBytes (an
+	// archive created before that field existed) and so carries no ground
+	// truth to check against. Deliberately generous: a VM disk with large
+	// zero-filled regions can legitimately compress at very high ratios,
+	// and this is a last-resort guard against a truly pathological
+	// expansion, not a tight bound.
+	fallbackDecompressionMultiplier = 500
+
+	// decompressionSlackBytes is added on top of a manifest's recorded
+	// UncompressedSizeBytes to get the real cap. It's not a
+	// compression-ratio guess -- it accounts for dirSize (measured at
+	// backup time, before createArchive runs) including the Fusion
+	// "*.lck" lock directories that createArchive then excludes from the
+	// tar (see the 2026-09-11 incident note in CLAUDE.md), plus tar's
+	// per-entry 512-byte header rounding. A real .vmwarevm bundle has a
+	// handful of files, not thousands, so this is generous relative to
+	// that overhead.
+	decompressionSlackBytes = 64 * 1024
+)
+
+// copyCapped copies from src to dst, stopping once remaining bytes have
+// been written, and reports whether src had more data beyond that budget
+// rather than silently truncating. It copies remaining+1 bytes in a single
+// pass: if src is exhausted at or before remaining bytes, io.CopyN returns
+// io.EOF and copyCapped reports limitHit=false; if the full remaining+1
+// bytes copy without hitting src's EOF, there was more data than the
+// budget allowed, and copyCapped reports limitHit=true (having written one
+// byte past the budget, immediately followed by the caller aborting the
+// whole extraction -- one byte of overrun is an acceptable cost for
+// detecting the overrun without a second read pass).
+func copyCapped(dst io.Writer, src io.Reader, remaining int64) (written int64, limitHit bool, err error) {
+	n, cerr := io.CopyN(dst, src, remaining+1)
+	switch cerr {
+	case nil:
+		return n, true, nil
+	case io.EOF:
+		return n, false, nil
+	default:
+		return n, false, cerr
+	}
+}
+
 // extractArchive decompresses+untars srcPath (compressed as identified by
 // compression, "zstd" or "gzip" -- Manifest.Compression, not re-sniffed)
 // into destDir, which must not already exist. Mirrors createArchive's

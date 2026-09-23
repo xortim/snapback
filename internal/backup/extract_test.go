@@ -429,3 +429,48 @@ func TestExtractArchive_ZstdCorruptedArchive_NoDeadlock(t *testing.T) {
 		t.Fatal("extractArchive() deadlocked on corrupted zstd archive (>10s timeout)")
 	}
 }
+
+func TestCopyCapped_UnderBudget_CopiesEverythingNoLimitHit(t *testing.T) {
+	src := bytes.NewReader([]byte("hello world"))
+	var dst bytes.Buffer
+	written, limitHit, err := copyCapped(&dst, src, 1024)
+	if err != nil {
+		t.Fatalf("copyCapped() error = %v, want nil", err)
+	}
+	if limitHit {
+		t.Error("copyCapped() limitHit = true, want false (well under budget)")
+	}
+	if written != 11 || dst.String() != "hello world" {
+		t.Errorf("copyCapped() = (%d, %q), want (11, %q)", written, dst.String(), "hello world")
+	}
+}
+
+func TestCopyCapped_ExceedsBudget_ReportsLimitHit(t *testing.T) {
+	src := bytes.NewReader([]byte("hello world")) // 11 bytes
+	var dst bytes.Buffer
+	written, limitHit, err := copyCapped(&dst, src, 5)
+	if err != nil {
+		t.Fatalf("copyCapped() error = %v, want nil", err)
+	}
+	if !limitHit {
+		t.Error("copyCapped() limitHit = false, want true (source exceeds budget)")
+	}
+	if written != 6 {
+		t.Errorf("copyCapped() written = %d, want 6 (budget + 1 byte to detect overflow)", written)
+	}
+}
+
+func TestCopyCapped_ExactlyAtBudget_NoLimitHit(t *testing.T) {
+	src := bytes.NewReader([]byte("hello")) // exactly 5 bytes
+	var dst bytes.Buffer
+	written, limitHit, err := copyCapped(&dst, src, 5)
+	if err != nil {
+		t.Fatalf("copyCapped() error = %v, want nil", err)
+	}
+	if limitHit {
+		t.Error("copyCapped() limitHit = true, want false (source exactly fills budget, no more)")
+	}
+	if written != 5 || dst.String() != "hello" {
+		t.Errorf("copyCapped() = (%d, %q), want (5, %q)", written, dst.String(), "hello")
+	}
+}
