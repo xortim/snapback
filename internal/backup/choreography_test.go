@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,6 +75,9 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 	if result.Manifest.SizeBytes == 0 {
 		t.Error("Manifest.SizeBytes = 0, want > 0")
 	}
+	if result.Manifest.UncompressedSizeBytes == 0 {
+		t.Error("Manifest.UncompressedSizeBytes = 0, want > 0")
+	}
 	if !result.Manifest.Timestamp.Equal(fixedNow) {
 		t.Errorf("Manifest.Timestamp = %v, want %v", result.Manifest.Timestamp, fixedNow)
 	}
@@ -113,7 +117,8 @@ func TestRun_HappyPath_ProducesArchiveAndManifest(t *testing.T) {
 		!onDiskManifest.Timestamp.Equal(result.Manifest.Timestamp) ||
 		onDiskManifest.ToolsState != result.Manifest.ToolsState ||
 		onDiskManifest.SHA256 != result.Manifest.SHA256 ||
-		onDiskManifest.Compression != result.Manifest.Compression {
+		onDiskManifest.Compression != result.Manifest.Compression ||
+		onDiskManifest.UncompressedSizeBytes != result.Manifest.UncompressedSizeBytes {
 		t.Errorf("manifest.json on disk = %+v, want %+v", onDiskManifest, result.Manifest)
 	}
 
@@ -731,6 +736,116 @@ func TestRun_OutputPermissions_MatchStagingHardening(t *testing.T) {
 	}
 	if perm := manifestInfo.Mode().Perm(); perm != 0o600 {
 		t.Errorf("ManifestPath perm = %o, want %o", perm, 0o600)
+	}
+}
+
+// snapshotAddsFileController wraps vm.FakeVMController so Snapshot also
+// writes an extra file into the bundle directory, simulating the delta disk
+// ("-00000N.vmdk") a real VMware snapshot adds -- FakeVMController's own
+// Snapshot is a pure in-memory no-op that never touches the filesystem, so
+// nothing in the suite otherwise reproduces the gap between the bundle as
+// measured before the snapshot and the bundle as actually archived after it.
+type snapshotAddsFileController struct {
+	*vm.FakeVMController
+	bundleDir string
+}
+
+func (c *snapshotAddsFileController) Snapshot(vmxPath, name string) error {
+	if err := c.FakeVMController.Snapshot(vmxPath, name); err != nil {
+		return err
+	}
+	// Deliberately larger than extract.go's decompressionSlackBytes (64KB):
+	// a delta smaller than the slack would be absorbed by it, and the
+	// restore half of this test would pass even against a manifest sized
+	// from the pre-snapshot bundle.
+	return os.WriteFile(filepath.Join(c.bundleDir, "disk-000001.vmdk"), bytes.Repeat([]byte{0x01}, 256*1024), 0o644)
+}
+
+// dirSizeForTest sums the regular-file bytes under dir -- a test-local
+// stand-in for internal/backup's unexported dirSize, which this external
+// test package can't reach.
+func dirSizeForTest(t *testing.T, dir string) int64 {
+	t.Helper()
+	var total int64
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		total += info.Size()
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk %s: %v", dir, err)
+	}
+	return total
+}
+
+// TestRun_ManifestUncompressedSize_ReflectsPostSnapshotArchivedContent is the
+// end-to-end guard for Manifest.UncompressedSizeBytes being measured at the
+// right point. Run's totalBytes (dirSize of the bundle) is computed before
+// ctrl.Snapshot runs; the archive is built afterward, from a staged copy that
+// includes everything the snapshot added. Sizing the manifest from totalBytes
+// therefore records a number smaller than the archive it's supposed to bound,
+// and restore's decompression cap -- unlike the progress bar, which clamps --
+// aborts rather than degrading when that bound is too small. So this asserts
+// both halves: the recorded size exceeds the pre-snapshot measurement, and a
+// restore of the archive Run just produced is not falsely capped.
+func TestRun_ManifestUncompressedSize_ReflectsPostSnapshotArchivedContent(t *testing.T) {
+	srcBundle := filepath.Join(t.TempDir(), "myvm.vmwarevm")
+	if err := os.MkdirAll(srcBundle, 0o755); err != nil {
+		t.Fatalf("mkdir bundle: %v", err)
+	}
+	vmxPath := filepath.Join(srcBundle, "myvm.vmx")
+	if err := os.WriteFile(vmxPath, []byte("guestOS = \"ubuntu-64\"\nscsi0:0.fileName = \"disk.vmdk\"\n"), 0o644); err != nil {
+		t.Fatalf("write vmx: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(srcBundle, "disk.vmdk"), []byte("fake disk contents"), 0o644); err != nil {
+		t.Fatalf("write disk: %v", err)
+	}
+
+	preSnapshotSize := dirSizeForTest(t, srcBundle)
+
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning // running: Run skips its disk-consistency checks
+	ctrl := &snapshotAddsFileController{FakeVMController: fake, bundleDir: srcBundle}
+
+	destination := t.TempDir()
+	result, err := backup.Run(t.Context(), ctrl, progress.NoOpReporter{}, backup.Options{
+		VMName:      "myvm",
+		VMXPath:     vmxPath,
+		Destination: destination,
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil", err)
+	}
+
+	if result.Manifest.UncompressedSizeBytes <= preSnapshotSize {
+		t.Fatalf("Manifest.UncompressedSizeBytes = %d, want > %d (the pre-snapshot bundle size) -- it must count what was actually archived after the snapshot added its delta disk, not the stale pre-snapshot measurement",
+			result.Manifest.UncompressedSizeBytes, preSnapshotSize)
+	}
+
+	// The archive Run just wrote must restore without tripping the
+	// decompression cap its own manifest sized.
+	restored, err := backup.Restore(t.Context(), vm.NewFakeVMController(), progress.NoOpReporter{}, backup.RestoreOptions{
+		ArchiveID:   result.ArchiveID,
+		Destination: destination,
+		TargetDir:   t.TempDir(),
+		StagingDir:  t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Restore() error = %v, want nil -- a backup this same code just created must not be rejected by its own decompression cap", err)
+	}
+	if _, err := os.Stat(filepath.Join(restored.TargetPath, "disk-000001.vmdk")); err != nil {
+		t.Errorf("restored bundle is missing the snapshot delta disk: %v", err)
 	}
 }
 

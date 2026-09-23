@@ -24,6 +24,21 @@ type Manifest struct {
 	ToolsState  vm.ToolsState `json:"tools_state"`
 	SHA256      string        `json:"sha256"`
 	Compression string        `json:"compression"`
+	// UncompressedSizeBytes is the total number of regular-file bytes
+	// createArchive actually wrote into the tar (Run's archivedBytes,
+	// counted by tarTo as it reads each file, and so excluding Fusion
+	// "*.lck" lock directories exactly as extraction does) -- ground truth
+	// for how large extraction should be, used by restore's decompression
+	// cap (extract.go) instead of guessing from the compressed archive size
+	// and a ratio, since VM disks can legitimately compress at very high
+	// ratios. Deliberately measured at tar time rather than from a
+	// pre-snapshot dirSize of the bundle: the snapshot Run takes adds delta
+	// disks and a .vmsn state file that the archive then carries, so a
+	// pre-snapshot measurement would under-count the archive it's meant to
+	// bound (see Run's archivedBytes comment). Zero on a manifest written
+	// before this field existed; extractArchive falls back to a
+	// multiplier-based cap in that case.
+	UncompressedSizeBytes int64 `json:"uncompressed_size_bytes"`
 }
 
 // writeManifest marshals m as indented JSON to path.

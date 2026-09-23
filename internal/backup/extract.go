@@ -6,18 +6,83 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 )
 
+const (
+	// fallbackDecompressionMultiplier bounds total decompressed bytes as a
+	// multiple of the compressed archive's on-disk size, used only when
+	// the archive's manifest predates Manifest.UncompressedSizeBytes (an
+	// archive created before that field existed) and so carries no ground
+	// truth to check against. Deliberately generous: a VM disk with large
+	// zero-filled regions can legitimately compress at very high ratios,
+	// and this is a last-resort guard against a truly pathological
+	// expansion, not a tight bound.
+	//
+	// Note how little this does for a gzip archive specifically: deflate
+	// caps a back-reference's match length at 258 bytes, so its compression
+	// ratio on the highly repetitive (RLE-style) data an archive bomb is
+	// built from asymptotes at roughly 510:1. A 500x multiplier therefore
+	// only trips on a gzip archive compressed at very nearly that
+	// theoretical ceiling. It earns its keep for zstd, which reaches far
+	// higher ratios on constant data -- don't read the gzip path as
+	// meaningfully bounded by this.
+	fallbackDecompressionMultiplier = 500
+
+	// decompressionSlackBytes is added on top of a manifest's recorded
+	// UncompressedSizeBytes to get the real cap. It's not a
+	// compression-ratio guess, and it isn't compensating for any known
+	// systematic gap either: UncompressedSizeBytes is counted at tar time
+	// from the same regular-file bytes, with the same "*.lck" exclusion,
+	// that extraction re-produces, so the two should agree exactly. This is
+	// plain defensive headroom in case that equality doesn't quite hold --
+	// e.g. a manifest written by some future createArchive variant that
+	// counts marginally differently -- not compensation for tar's own
+	// header/padding bytes, which neither count includes in the first
+	// place. A real .vmwarevm bundle has a handful of files, not
+	// thousands, so this is generous relative to that overhead.
+	decompressionSlackBytes = 64 * 1024
+)
+
+// copyCapped copies from src to dst, stopping once remaining bytes have
+// been written, and reports whether src had more data beyond that budget
+// rather than silently truncating. It copies remaining+1 bytes in a single
+// pass: if src is exhausted at or before remaining bytes, io.CopyN returns
+// io.EOF and copyCapped reports limitHit=false; if the full remaining+1
+// bytes copy without hitting src's EOF, there was more data than the
+// budget allowed, and copyCapped reports limitHit=true (having written one
+// byte past the budget, immediately followed by the caller aborting the
+// whole extraction -- one byte of overrun is an acceptable cost for
+// detecting the overrun without a second read pass).
+func copyCapped(dst io.Writer, src io.Reader, remaining int64) (written int64, limitHit bool, err error) {
+	n, cerr := io.CopyN(dst, src, remaining+1)
+	switch cerr {
+	case nil:
+		return n, true, nil
+	case io.EOF:
+		return n, false, nil
+	default:
+		return n, false, cerr
+	}
+}
+
 // extractArchive decompresses+untars srcPath (compressed as identified by
 // compression, "zstd" or "gzip" -- Manifest.Compression, not re-sniffed)
 // into destDir, which must not already exist. Mirrors createArchive's
-// shape in reverse. If onWrite is non-nil, it's invoked with the running
-// cumulative bytes written across all files.
-func extractArchive(srcPath, destDir, compression string, onWrite func(cumulativeBytes int64)) error {
+// shape in reverse. expectedUncompressedBytes should be
+// Manifest.UncompressedSizeBytes (0 for a manifest written before that
+// field existed, in which case a generous multiplier against the
+// compressed archive's own size is used instead) -- see the
+// fallbackDecompressionMultiplier and decompressionSlackBytes doc
+// comments for why. Either way, extraction aborts with an error rather
+// than filling the destination disk if actual decompressed output
+// exceeds the resulting cap. If onWrite is non-nil, it's invoked with
+// the running cumulative bytes written across all files.
+func extractArchive(srcPath, destDir, compression string, expectedUncompressedBytes int64, onWrite func(cumulativeBytes int64)) error {
 	if _, err := os.Stat(destDir); err == nil {
 		return fmt.Errorf("extract archive: %s already exists (left by a previous failed restore attempt -- if you're not currently retrying that restore, it's safe to remove and try again)", destDir)
 	} else if !os.IsNotExist(err) {
@@ -33,6 +98,26 @@ func extractArchive(srcPath, destDir, compression string, onWrite func(cumulativ
 	}
 	defer func() { _ = in.Close() }()
 
+	// Clamped rather than added blindly: expectedUncompressedBytes comes
+	// from a manifest.json on disk, so a corrupt or tampered one carrying a
+	// value near math.MaxInt64 would wrap the sum negative. Extraction would
+	// still abort (the first entry immediately exceeds a negative budget),
+	// but the error would quote a nonsensical negative byte count. The
+	// clamp lands one below math.MaxInt64, not on it: copyCapped computes
+	// remaining+1 off of maxBytes, and remaining+1 itself overflows if
+	// maxBytes is allowed to reach math.MaxInt64.
+	maxBytes := int64(math.MaxInt64 - 1)
+	if expectedUncompressedBytes <= math.MaxInt64-decompressionSlackBytes-1 {
+		maxBytes = expectedUncompressedBytes + decompressionSlackBytes
+	}
+	if expectedUncompressedBytes <= 0 {
+		info, err := in.Stat()
+		if err != nil {
+			return fmt.Errorf("stat %s: %w", srcPath, err)
+		}
+		maxBytes = info.Size() * fallbackDecompressionMultiplier
+	}
+
 	switch compression {
 	case "gzip":
 		gz, err := gzip.NewReader(in)
@@ -40,9 +125,9 @@ func extractArchive(srcPath, destDir, compression string, onWrite func(cumulativ
 			return fmt.Errorf("gzip reader: %w", err)
 		}
 		defer func() { _ = gz.Close() }()
-		return untarFrom(gz, destDir, onWrite)
+		return untarFrom(gz, destDir, maxBytes, onWrite)
 	case "zstd":
-		return untarFromZstd(in, destDir, onWrite)
+		return untarFromZstd(in, destDir, maxBytes, onWrite)
 	default:
 		return fmt.Errorf("unknown compression %q", compression)
 	}
@@ -52,8 +137,9 @@ func extractArchive(srcPath, destDir, compression string, onWrite func(cumulativ
 // and untars the result into destDir -- the reverse of tarToZstd
 // (archive.go). Manifest.Compression already records that this archive
 // was compressed with zstd, so there's no fallback-detection logic here:
-// if zstd isn't on PATH, restoring this archive fails outright.
-func untarFromZstd(in io.Reader, destDir string, onWrite func(cumulativeBytes int64)) error {
+// if zstd isn't on PATH, restoring this archive fails outright. maxBytes
+// is the decompression cap, forwarded to untarFrom.
+func untarFromZstd(in io.Reader, destDir string, maxBytes int64, onWrite func(cumulativeBytes int64)) error {
 	if _, err := lookZstd(); err != nil {
 		return fmt.Errorf("zstd not found on PATH (required to restore a zstd-compressed archive): %w", err)
 	}
@@ -70,10 +156,11 @@ func untarFromZstd(in io.Reader, destDir string, onWrite func(cumulativeBytes in
 		return fmt.Errorf("start zstd: %w", err)
 	}
 
-	untarErr := untarFrom(stdout, destDir, onWrite)
+	untarErr := untarFrom(stdout, destDir, maxBytes, onWrite)
 	// Drain any remaining stdout to unblock zstd if untarFrom exited early
-	// (corrupt tar, path-traversal rejection) before fully reading its output.
-	// This prevents a deadlock where zstd blocks on a full pipe buffer.
+	// (corrupt tar, path-traversal rejection, decompression cap hit)
+	// before fully reading its output. This prevents a deadlock where
+	// zstd blocks on a full pipe buffer.
 	_, _ = io.Copy(io.Discard, stdout)
 	waitErr := cmd.Wait()
 
@@ -90,9 +177,12 @@ func untarFromZstd(in io.Reader, destDir string, onWrite func(cumulativeBytes in
 // rejecting any entry whose resolved path would land outside destDir
 // (rejecting ".."-escaping or absolute entry names) -- a cheap, standard
 // guard against a corrupted or tampered archive writing outside the
-// staging directory. If onWrite is non-nil, it's invoked as file bytes are
-// written, with the running cumulative total across all files.
-func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64)) error {
+// staging directory. Aborts once the running total of regular-file bytes
+// written would exceed maxBytes, rather than letting a pathological
+// archive fill the destination disk (see extractArchive's doc comment for
+// how maxBytes is derived). If onWrite is non-nil, it's invoked as file
+// bytes are written, with the running cumulative total across all files.
+func untarFrom(r io.Reader, destDir string, maxBytes int64, onWrite func(cumulativeBytes int64)) error {
 	tr := tar.NewReader(r)
 	var cumulative int64
 	for {
@@ -154,7 +244,7 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 			if err != nil {
 				return fmt.Errorf("create %s: %w", target, err)
 			}
-			n, copyErr := io.Copy(out, tr)
+			n, limitHit, copyErr := copyCapped(out, tr, maxBytes-cumulative)
 			closeErr := out.Close()
 			if copyErr != nil {
 				return fmt.Errorf("write %s: %w", target, copyErr)
@@ -163,6 +253,9 @@ func untarFrom(r io.Reader, destDir string, onWrite func(cumulativeBytes int64))
 				return fmt.Errorf("close %s: %w", target, closeErr)
 			}
 			cumulative += n
+			if limitHit {
+				return fmt.Errorf("archive decompressed past %d bytes while extracting %q -- aborting to avoid filling the destination disk (archive may be corrupt or the manifest's recorded size doesn't match its actual contents)", maxBytes, hdr.Name)
+			}
 			if onWrite != nil {
 				onWrite(cumulative)
 			}
