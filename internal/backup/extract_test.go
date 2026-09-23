@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -472,6 +473,34 @@ func TestCopyCapped_ExactlyAtBudget_NoLimitHit(t *testing.T) {
 	}
 	if written != 5 || dst.String() != "hello" {
 		t.Errorf("copyCapped() = (%d, %q), want (5, %q)", written, dst.String(), "hello")
+	}
+}
+
+func TestExtractArchive_ExpectedSizeNearMaxInt64_DoesNotFalselyAbort(t *testing.T) {
+	// Regression test: expectedUncompressedBytes this close to math.MaxInt64
+	// used to make extractArchive clamp maxBytes to exactly math.MaxInt64,
+	// which then overflowed a second time inside copyCapped's `remaining+1`
+	// and aborted extraction of a perfectly valid archive on its first file,
+	// with zero bytes written and no useful error.
+	srcDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(srcDir, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatalf("write a.txt: %v", err)
+	}
+	archivePath := filepath.Join(t.TempDir(), "archive.tar.gz")
+	if _, err := createArchive(srcDir, archivePath, "gzip", nil); err != nil {
+		t.Fatalf("createArchive: %v", err)
+	}
+
+	destDir := filepath.Join(t.TempDir(), "extracted")
+	if err := extractArchive(archivePath, destDir, "gzip", math.MaxInt64, nil); err != nil {
+		t.Fatalf("extractArchive() error = %v, want nil (expectedUncompressedBytes near math.MaxInt64 must not falsely trip the cap)", err)
+	}
+	got, err := os.ReadFile(filepath.Join(destDir, "a.txt"))
+	if err != nil {
+		t.Fatalf("ReadFile(a.txt): %v", err)
+	}
+	if string(got) != "hello" {
+		t.Errorf("extracted a.txt = %q, want %q", got, "hello")
 	}
 }
 

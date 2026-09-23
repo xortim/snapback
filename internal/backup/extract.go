@@ -39,11 +39,12 @@ const (
 	// systematic gap either: UncompressedSizeBytes is counted at tar time
 	// from the same regular-file bytes, with the same "*.lck" exclusion,
 	// that extraction re-produces, so the two should agree exactly. This is
-	// plain defensive headroom for the rounding and per-entry bookkeeping
-	// around that equality (tar's 512-byte header/padding granularity, a
-	// manifest written by some future createArchive variant that counts
-	// marginally differently). A real .vmwarevm bundle has a handful of
-	// files, not thousands, so this is generous relative to that overhead.
+	// plain defensive headroom in case that equality doesn't quite hold --
+	// e.g. a manifest written by some future createArchive variant that
+	// counts marginally differently -- not compensation for tar's own
+	// header/padding bytes, which neither count includes in the first
+	// place. A real .vmwarevm bundle has a handful of files, not
+	// thousands, so this is generous relative to that overhead.
 	decompressionSlackBytes = 64 * 1024
 )
 
@@ -101,9 +102,12 @@ func extractArchive(srcPath, destDir, compression string, expectedUncompressedBy
 	// from a manifest.json on disk, so a corrupt or tampered one carrying a
 	// value near math.MaxInt64 would wrap the sum negative. Extraction would
 	// still abort (the first entry immediately exceeds a negative budget),
-	// but the error would quote a nonsensical negative byte count.
-	maxBytes := int64(math.MaxInt64)
-	if expectedUncompressedBytes <= math.MaxInt64-decompressionSlackBytes {
+	// but the error would quote a nonsensical negative byte count. The
+	// clamp lands one below math.MaxInt64, not on it: copyCapped computes
+	// remaining+1 off of maxBytes, and remaining+1 itself overflows if
+	// maxBytes is allowed to reach math.MaxInt64.
+	maxBytes := int64(math.MaxInt64 - 1)
+	if expectedUncompressedBytes <= math.MaxInt64-decompressionSlackBytes-1 {
 		maxBytes = expectedUncompressedBytes + decompressionSlackBytes
 	}
 	if expectedUncompressedBytes <= 0 {
