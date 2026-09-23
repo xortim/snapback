@@ -474,3 +474,15 @@ func TestCopyCapped_ExactlyAtBudget_NoLimitHit(t *testing.T) {
 		t.Errorf("copyCapped() = (%d, %q), want (5, %q)", written, dst.String(), "hello")
 	}
 }
+
+func TestDecompressionCapConstants(t *testing.T) {
+	// Verify the decompression cap constants have their expected values.
+	// These constants are used by Task 3 to cap decompression size;
+	// this test ensures they're defined and have sensible bounds.
+	if fallbackDecompressionMultiplier != 500 {
+		t.Errorf("fallbackDecompressionMultiplier = %d, want 500", fallbackDecompressionMultiplier)
+	}
+	if decompressionSlackBytes != 64*1024 {
+		t.Errorf("decompressionSlackBytes = %d, want %d", decompressionSlackBytes, 64*1024)
+	}
+}
