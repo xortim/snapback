@@ -145,7 +145,7 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	// for extraction's (uncompressed) total -- same clamped-at-1 tolerance
 	// percentOf already documents for Run's own Compressing stage.
 	onWrite := throttledPercentReporter(reporter, progress.Extracting, archive.Manifest.SizeBytes)
-	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, onWrite); err != nil {
+	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, 0, onWrite); err != nil {
 		return nil, &RunError{Stage: progress.Extracting, Err: err}
 	}
 	keepStaging = true
