@@ -143,9 +143,13 @@ func Restore(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter
 	reporter.Report(progress.Event{Stage: progress.Extracting, Message: "extracting archive"})
 	// archive.Manifest.SizeBytes is the compressed size, an approximation
 	// for extraction's (uncompressed) total -- same clamped-at-1 tolerance
-	// percentOf already documents for Run's own Compressing stage.
+	// percentOf already documents for Run's own Compressing stage. The
+	// decompression cap enforced inside extractArchive uses the more
+	// precise archive.Manifest.UncompressedSizeBytes instead (falling back
+	// to a multiplier against SizeBytes for an older manifest that
+	// predates that field) -- see extractArchive's doc comment.
 	onWrite := throttledPercentReporter(reporter, progress.Extracting, archive.Manifest.SizeBytes)
-	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, 0, onWrite); err != nil {
+	if err := extractArchive(archivePath, stagingDir, archive.Manifest.Compression, archive.Manifest.UncompressedSizeBytes, onWrite); err != nil {
 		return nil, &RunError{Stage: progress.Extracting, Err: err}
 	}
 	keepStaging = true
