@@ -1,7 +1,6 @@
 package launchd
 
 import (
-	"bytes"
 	"fmt"
 
 	"github.com/xortim/snapback/internal/config"
@@ -13,7 +12,12 @@ import (
 type SyncResult struct {
 	Installed []string // VM names newly given a LaunchAgent
 	Updated   []string // VM names whose LaunchAgent was rewritten and re-bootstrapped
-	Removed   []string // labels booted out and deleted
+	// Reloaded lists VM names whose on-disk plist content already
+	// matched config but had to be re-bootstrapped because it wasn't
+	// loaded (e.g. after a manual `launchctl bootout`, or an
+	// interrupted prior sync). See ADR-006.
+	Reloaded []string
+	Removed  []string // labels booted out and deleted
 	// Skipped lists VM names whose LaunchAgent needed a change (new
 	// install or updated content) but were left alone because a backup
 	// was in progress for that VM at the time -- see RunningChecker.
@@ -26,7 +30,7 @@ type SyncResult struct {
 
 // IsEmpty reports whether Sync found nothing to do.
 func (r SyncResult) IsEmpty() bool {
-	return len(r.Installed) == 0 && len(r.Updated) == 0 && len(r.Removed) == 0 && len(r.Skipped) == 0
+	return len(r.Installed) == 0 && len(r.Updated) == 0 && len(r.Reloaded) == 0 && len(r.Skipped) == 0 && len(r.Removed) == 0
 }
 
 // RunningChecker reports whether vmName currently has a backup in
@@ -144,39 +148,14 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 	if err != nil {
 		return SyncResult{}, fmt.Errorf("list installed schedules: %w", err)
 	}
-	existing := make(map[string]bool, len(existingLabels))
-	for _, l := range existingLabels {
-		existing[l] = true
-	}
 
 	var result SyncResult
 	for _, agent := range scheduled {
-		install := !existing[agent.Label]
-
-		// Determine whether this agent's content actually needs to
-		// change *before* calling Write or consulting isRunning --
-		// Write both diffs and persists in one call, so deciding
-		// "changed" from its return value would mean either probing
-		// isRunning (and, for a real destination, touching the
-		// filesystem) for every already-in-sync VM on every Sync, or
-		// leaving a skip's plist half-written. Read-then-compare keeps
-		// both Write and isRunning off the hot, common path where
-		// nothing needs to happen.
-		var changed bool
-		if install {
-			changed = true
-		} else {
-			existingData, ok, err := installer.Read(agent.Label)
-			if err != nil {
-				return result, fmt.Errorf("read existing plist for %q: %w", agent.VMName, err)
-			}
-			candidate, err := renderPlist(agent)
-			if err != nil {
-				return result, fmt.Errorf("render plist for %q: %w", agent.VMName, err)
-			}
-			changed = !ok || !bytes.Equal(existingData, candidate)
+		state, err := classifyAgent(installer, agent)
+		if err != nil {
+			return result, err
 		}
-		if !changed {
+		if state == agentInSync {
 			continue
 		}
 
@@ -189,29 +168,35 @@ func Sync(installer Installer, vms []config.VM, binaryPath string, isRunning Run
 			continue
 		}
 
+		// Write is called on every branch, including agentNotLoaded
+		// (content already correct): its own idempotency (changed is
+		// only true when content actually differs) means this never
+		// re-writes the file needlessly, and it's the only way any
+		// branch learns plistPath to pass to Bootstrap below.
 		plistPath, _, err := installer.Write(agent)
 		if err != nil {
 			return result, fmt.Errorf("write plist for %q: %w", agent.VMName, err)
 		}
-		// Bootout before Bootstrap on *both* paths, not just the update
-		// path. Bootstrap fails against an already-loaded label, and
-		// "install" here only means "no plist on disk" (that's all
-		// Installer.List can see) -- a job can still be loaded in
-		// launchd's session with its plist deleted by hand, which would
-		// otherwise make an unrelated command like `vm add` fail after it
-		// had already written config.yaml. Bootout is idempotent for a
-		// label that isn't loaded (see isNotLoadedError), so the extra
-		// call is free on the normal install path.
+		// Bootout before Bootstrap on every path, not just update: List()
+		// only sees disk, so a job whose plist was hand-deleted (or
+		// whose content matches but isn't loaded) can still be loaded in
+		// launchd's session, and Bootstrap fails against an
+		// already-loaded label. Bootout is idempotent for a label that
+		// isn't loaded, so the extra call costs nothing when it wasn't
+		// needed.
 		if err := installer.Bootout(agent.Label); err != nil {
 			return result, fmt.Errorf("bootout stale %q: %w", agent.VMName, err)
 		}
 		if err := installer.Bootstrap(plistPath); err != nil {
 			return result, fmt.Errorf("bootstrap %q: %w", agent.VMName, err)
 		}
-		if install {
+		switch state {
+		case agentMissing:
 			result.Installed = append(result.Installed, agent.VMName)
-		} else {
+		case agentDiffers:
 			result.Updated = append(result.Updated, agent.VMName)
+		case agentNotLoaded:
+			result.Reloaded = append(result.Reloaded, agent.VMName)
 		}
 	}
 
