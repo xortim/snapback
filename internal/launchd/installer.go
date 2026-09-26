@@ -136,11 +136,14 @@ func (l *LaunchctlInstaller) IsLoaded(label string) (bool, error) {
 	return true, nil
 }
 
-// isNotLoadedError reports whether err from `launchctl bootout` means
-// "that label wasn't loaded in the first place" rather than a real
-// failure. Sync's contract is idempotent removal (and, since the install
-// path also boots out defensively before bootstrapping, idempotent
-// install), so this must not surface as an error.
+// isNotLoadedError reports whether err from `launchctl bootout` or
+// `launchctl print` (IsLoaded's own call) means "that label wasn't
+// loaded in the first place" rather than a real failure. Sync's
+// contract is idempotent removal (and, since the install path also
+// boots out defensively before bootstrapping, idempotent install), so
+// this must not surface as an error from Bootout; IsLoaded relies on
+// the same tolerance to report false, nil rather than an error for an
+// unloaded label.
 //
 // Deliberately defensive: launchctl's exact wording here isn't
 // verifiable in this environment (no live macOS/launchd in CI), and it

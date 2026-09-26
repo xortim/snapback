@@ -240,7 +240,7 @@ func warnScheduleDrift(cmd *cobra.Command, deps statusDeps, vms []config.VM) err
 		}
 	}
 	for _, name := range report.OutOfSync {
-		if _, err := fmt.Fprintf(out, "warning: %q's installed LaunchAgent doesn't match config.yaml -- run `snapback schedule sync`\n", name); err != nil {
+		if _, err := fmt.Fprintf(out, "warning: %q's installed LaunchAgent doesn't match config.yaml -- run `snapback schedule sync` (from the installed snapback, not a local build: its own path is written into the LaunchAgent)\n", name); err != nil {
 			return err
 		}
 	}

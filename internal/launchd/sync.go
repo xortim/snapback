@@ -39,15 +39,17 @@ func (r SyncResult) IsEmpty() bool {
 // the running job, which would otherwise kill a scheduled backup
 // mid-choreography (see CLAUDE.md's "Known gotchas" for the
 // orphaned-snapshot incident this guards against). It's checked
-// whenever Sync has determined an agent's plist content actually
-// differs from what's on disk (see Sync's use of Installer.Read) --
-// including a fresh install, not just an update: "install" just means
-// "no plist on disk" (see the doc comment on the installer.Bootout call
-// below), and a job can still be loaded in launchd's session with its
-// plist hand-deleted, in which case a naive install-only check would
-// miss it and boot out unconditionally. An already-in-sync VM (content
-// unchanged) never consults this at all, so a flaky or unmounted backup
-// destination can't break a `schedule sync` that has nothing to do.
+// whenever classifyAgent (see classify.go) reports the VM isn't fully
+// in sync: content differs from what's on disk, content matches but
+// isn't loaded, or the plist is missing outright. Even the
+// content-matches-but-not-loaded case still consults this before
+// Bootstrap -- Bootstrap alone can't collide with an in-progress
+// manual run, but a job whose StartCalendarInterval has already
+// elapsed can fire immediately on load, so the same guard applies
+// uniformly rather than special-casing that branch away. Only a truly
+// in-sync VM (content matches AND already loaded) never consults this
+// at all, so a flaky or unmounted backup destination can't break a
+// `schedule sync` that has nothing to do.
 //
 // This check has a TOCTOU gap: it probes the lock and releases it
 // immediately (see backup.IsRunning), so a launchd-started run that
@@ -83,8 +85,8 @@ type RunningChecker func(vmName string) (bool, error)
 // longer corresponds to a scheduled VM in vms gets booted out and
 // removed. Safe to call repeatedly -- an already-in-sync config
 // produces an empty SyncResult and, for each already-scheduled VM, only
-// the one Read() beyond the initial List() (no Write, no isRunning
-// probe, no Bootout/Bootstrap).
+// the Read() and IsLoaded() classifyAgent needs beyond the initial
+// List() (no Write, no isRunning probe, no Bootout/Bootstrap).
 //
 // binaryPath is embedded into each plist's ProgramArguments as the
 // snapback binary to invoke (os.Executable(), resolved by the caller) --
