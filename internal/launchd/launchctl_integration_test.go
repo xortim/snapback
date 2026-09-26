@@ -48,6 +48,44 @@ func TestIntegration_BootstrapThenBootout(t *testing.T) {
 	})
 }
 
+func TestIntegration_IsLoaded_ReflectsBootstrapAndBootout(t *testing.T) {
+	requireIntegration(t)
+	inst := &launchd.LaunchctlInstaller{Dir: t.TempDir()}
+	agent := launchd.Agent{
+		Label:      "com.tim.snapback.integration-isloaded",
+		VMName:     "integration-isloaded",
+		BinaryPath: "/bin/echo",
+		LogPath:    t.TempDir() + "/integration-isloaded.log",
+	}
+
+	path, _, err := inst.Write(agent)
+	if err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if loaded, err := inst.IsLoaded(agent.Label); err != nil || loaded {
+		t.Fatalf("IsLoaded() before Bootstrap = (%v, %v), want (false, nil)", loaded, err)
+	}
+
+	if err := inst.Bootstrap(path); err != nil {
+		t.Fatalf("Bootstrap() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := inst.Bootout(agent.Label); err != nil {
+			t.Errorf("cleanup Bootout() error = %v", err)
+		}
+	})
+
+	if loaded, err := inst.IsLoaded(agent.Label); err != nil || !loaded {
+		t.Errorf("IsLoaded() after Bootstrap = (%v, %v), want (true, nil)", loaded, err)
+	}
+	if err := inst.Bootout(agent.Label); err != nil {
+		t.Fatalf("Bootout() error = %v", err)
+	}
+	if loaded, err := inst.IsLoaded(agent.Label); err != nil || loaded {
+		t.Errorf("IsLoaded() after Bootout = (%v, %v), want (false, nil)", loaded, err)
+	}
+}
+
 // TestIntegration_BootoutNeverBootstrapped is the one place the
 // "not loaded" tolerance in LaunchctlInstaller.Bootout (isNotLoadedError)
 // can actually be confirmed: the exact message and exit code launchctl

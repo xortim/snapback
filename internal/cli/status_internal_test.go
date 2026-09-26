@@ -18,6 +18,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -223,6 +224,8 @@ func TestStatusCmd_Summary_OneRowPerConfiguredVM(t *testing.T) {
 		searchDirs:    func() []string { return nil },
 		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
 		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -268,6 +271,8 @@ func TestStatusCmd_Summary_NotesDiscoveredVMNotInConfig(t *testing.T) {
 			return []discoveredVM{{Name: "configured-vm"}, {Name: "new-vm"}}, nil
 		},
 		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -296,6 +301,8 @@ func TestStatusCmd_Summary_NoNoteWhenAllDiscoveredAreConfigured(t *testing.T) {
 			return []discoveredVM{{Name: "configured-vm"}}, nil
 		},
 		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -319,6 +326,8 @@ func TestStatusCmd_Summary_DiscoveryErrorIsNotedNotFatal(t *testing.T) {
 		searchDirs:    func() []string { return nil },
 		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, errBoom },
 		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -565,6 +574,8 @@ func TestStatusCmd_Summary_WarnsWhenDiskChainNeedsRepair(t *testing.T) {
 			fake.DiskConsistencyErr = errBoom
 			return fake, nil
 		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -593,6 +604,8 @@ func TestStatusCmd_Summary_NoWarningWhenDiskHealthy(t *testing.T) {
 			fake.ToolsState = vm.ToolsInstalled
 			return fake, nil
 		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -622,6 +635,8 @@ func TestStatusCmd_Summary_NoWarningForRunningVM(t *testing.T) {
 			fake.DiskConsistencyErr = errBoom // must not matter -- a running VM's disk files are locked
 			return fake, nil
 		},
+		newInstaller: func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:   func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	root.SetOut(&bytes.Buffer{})
@@ -672,6 +687,8 @@ func TestStatusCmd_Summary_DiskCheckFactoryErrorIsNotedNotFatal(t *testing.T) {
 		searchDirs:    func() []string { return nil },
 		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
 		newController: func() (vm.Controller, error) { return nil, errBoom },
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
 	})
 	root.SetArgs([]string{"status"})
 	var out bytes.Buffer
@@ -681,6 +698,180 @@ func TestStatusCmd_Summary_DiskCheckFactoryErrorIsNotedNotFatal(t *testing.T) {
 
 	if err := root.Execute(); err != nil {
 		t.Fatalf("Execute() error = %v, want nil -- a disk-check factory failure must not break status's core job", err)
+	}
+	if !strings.Contains(errOut.String(), errBoom.Error()) {
+		t.Errorf("stderr = %q, want it to note the factory failure", errOut.String())
+	}
+	if !strings.Contains(out.String(), "myvm") {
+		t.Errorf("stdout = %q, want the summary table still printed", out.String())
+	}
+}
+
+func TestStatusCmd_Summary_WarnsScheduleNotInstalled(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: "/vms/myvm.vmx", Schedule: "daily"}}}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return launchd.NewFakeInstaller(), nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "myvm") || !strings.Contains(errOut.String(), "schedule sync") {
+		t.Errorf("stderr = %q, want a warning naming %q and pointing at `snapback schedule sync`", errOut.String(), "myvm")
+	}
+}
+
+func TestStatusCmd_Summary_WarnsScheduleOutOfSync(t *testing.T) {
+	inst := launchd.NewFakeInstaller()
+	if _, _, err := inst.Write(launchd.Agent{Label: "com.tim.snapback.myvm", VMName: "myvm", BinaryPath: "/old/bin/snapback"}); err != nil {
+		t.Fatalf("seed Write() error = %v", err)
+	}
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: "/vms/myvm.vmx", Schedule: "daily"}}}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return inst, nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "myvm") || !strings.Contains(errOut.String(), "doesn't match config.yaml") {
+		t.Errorf("stderr = %q, want an out-of-sync warning naming %q", errOut.String(), "myvm")
+	}
+}
+
+func TestStatusCmd_Summary_WarnsScheduleNotLoaded(t *testing.T) {
+	vms := []config.VM{{Name: "myvm", VMX: "/vms/myvm.vmx", Schedule: "daily"}}
+	inst := launchd.NewFakeInstaller()
+	if _, err := launchd.Sync(inst, vms, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+	if err := inst.Bootout("com.tim.snapback.myvm"); err != nil {
+		t.Fatalf("simulated manual Bootout() error = %v", err)
+	}
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig:    func(string) (*config.Config, error) { return &config.Config{Destination: "/dest", VMs: vms}, nil },
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return inst, nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "warning:") || !strings.Contains(errOut.String(), "myvm") || !strings.Contains(errOut.String(), "not loaded") {
+		t.Errorf("stderr = %q, want a not-loaded warning naming %q", errOut.String(), "myvm")
+	}
+}
+
+func TestStatusCmd_Summary_NotesStaleSchedule(t *testing.T) {
+	inst := launchd.NewFakeInstaller()
+	if _, _, err := inst.Write(launchd.Agent{Label: "com.tim.snapback.orphan", VMName: "orphan"}); err != nil {
+		t.Fatalf("seed Write() error = %v", err)
+	}
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm", VMX: "/vms/myvm.vmx"}}}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return inst, nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if !strings.Contains(errOut.String(), "note:") || !strings.Contains(errOut.String(), "orphan") {
+		t.Errorf("stderr = %q, want a note: line naming the stale label %q", errOut.String(), "orphan")
+	}
+	if strings.Contains(errOut.String(), "warning:") {
+		t.Errorf("stderr = %q, want a stale schedule reported as note:, not warning:", errOut.String())
+	}
+}
+
+func TestStatusCmd_Summary_NoScheduleDriftNoteWhenAllInSync(t *testing.T) {
+	vms := []config.VM{{Name: "myvm", VMX: "/vms/myvm.vmx", Schedule: "daily"}}
+	inst := launchd.NewFakeInstaller()
+	if _, err := launchd.Sync(inst, vms, "/bin/snapback", func(string) (bool, error) { return false, nil }); err != nil {
+		t.Fatalf("seed Sync() error = %v", err)
+	}
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig:    func(string) (*config.Config, error) { return &config.Config{Destination: "/dest", VMs: vms}, nil },
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return inst, nil },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	root.SetOut(&bytes.Buffer{})
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil", err)
+	}
+	if strings.Contains(errOut.String(), "schedule sync") {
+		t.Errorf("stderr = %q, want no schedule-drift line when config and launchd already agree", errOut.String())
+	}
+}
+
+func TestStatusCmd_Summary_ScheduleDriftFactoryErrorIsNotedNotFatal(t *testing.T) {
+	root := newTestRootForStatus(t, statusDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{Destination: "/dest", VMs: []config.VM{{Name: "myvm"}}}, nil
+		},
+		listArchives:  func(string) ([]backup.Archive, error) { return nil, nil },
+		searchDirs:    func() []string { return nil },
+		discoverVMs:   func([]string) ([]discoveredVM, error) { return nil, nil },
+		newController: runningController,
+		newInstaller:  func() (launchd.Installer, error) { return nil, errBoom },
+		executable:    func() (string, error) { return "/bin/snapback", nil },
+	})
+	root.SetArgs([]string{"status"})
+	var out bytes.Buffer
+	root.SetOut(&out)
+	var errOut bytes.Buffer
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil -- a schedule-drift factory failure must not break status's core job", err)
 	}
 	if !strings.Contains(errOut.String(), errBoom.Error()) {
 		t.Errorf("stderr = %q, want it to note the factory failure", errOut.String())

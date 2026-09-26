@@ -47,6 +47,13 @@ type Installer interface {
 	// filesystem round-trip) on every Sync even when nothing needed to
 	// change.
 	Read(label string) (data []byte, ok bool, err error)
+	// IsLoaded reports whether label is currently bootstrapped into the
+	// GUI launchd domain, independent of whether a plist for it exists
+	// on disk -- List reports disk state, IsLoaded reports load state,
+	// and a label can be true for one and false for the other in either
+	// direction (see ADR-006,
+	// docs/superpowers/specs/2026-09-26-schedule-drift-detection-design.md).
+	IsLoaded(label string) (bool, error)
 }
 
 // LaunchctlInstaller is the real Installer, shelling out to launchctl
@@ -118,11 +125,25 @@ func (l *LaunchctlInstaller) Bootout(label string) error {
 	return err
 }
 
-// isNotLoadedError reports whether err from `launchctl bootout` means
-// "that label wasn't loaded in the first place" rather than a real
-// failure. Sync's contract is idempotent removal (and, since the install
-// path also boots out defensively before bootstrapping, idempotent
-// install), so this must not surface as an error.
+func (l *LaunchctlInstaller) IsLoaded(label string) (bool, error) {
+	err := runLaunchctl("print", guiDomain()+"/"+label)
+	if err != nil {
+		if isNotLoadedError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// isNotLoadedError reports whether err from `launchctl bootout` or
+// `launchctl print` (IsLoaded's own call) means "that label wasn't
+// loaded in the first place" rather than a real failure. Sync's
+// contract is idempotent removal (and, since the install path also
+// boots out defensively before bootstrapping, idempotent install), so
+// this must not surface as an error from Bootout; IsLoaded relies on
+// the same tolerance to report false, nil rather than an error for an
+// unloaded label.
 //
 // Deliberately defensive: launchctl's exact wording here isn't
 // verifiable in this environment (no live macOS/launchd in CI), and it

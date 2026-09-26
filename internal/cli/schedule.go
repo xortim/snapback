@@ -157,6 +157,11 @@ func printSyncResult(out io.Writer, result launchd.SyncResult) error {
 			return err
 		}
 	}
+	for _, name := range result.Reloaded {
+		if _, err := fmt.Fprintf(out, "reloaded: %s (was not bootstrapped)\n", name); err != nil {
+			return err
+		}
+	}
 	for _, name := range result.Skipped {
 		if _, err := fmt.Fprintf(out, "skipped: %s (backup in progress; re-run `snapback schedule sync` once it finishes)\n", name); err != nil {
 			return err
