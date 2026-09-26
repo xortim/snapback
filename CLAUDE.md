@@ -59,10 +59,16 @@ rotated in-process by size (5MB, 3 generations) rather than via
 the old Phase 2 bundled in did *not* ship: osascript notifications
 (split to #86, `progress.Notifying` still fires nothing) and `run --all`
 (unnecessary — one plist per VM means launchd invokes each `run --vm`
-independently). Open follow-up: #85, drift detection between
-`config.yaml` and what's actually installed *and loaded* — `Sync`
-classifies install-vs-update from disk contents only, so a plist that's
-on disk but not bootstrapped reads as "in sync".
+independently). Drift detection (#85) has since landed too: a new `Installer.IsLoaded`
+plus a shared `classifyAgent` helper
+(`internal/launchd/classify.go`) let `Sync` and a new read-only
+`launchd.CheckDrift` agree on exactly one definition of "in sync" --
+`Sync` now self-heals a plist whose content already matches config but
+isn't bootstrapped (reported under `SyncResult.Reloaded`), and
+`snapback status` calls `CheckDrift` to warn, non-fatally, about any
+VM whose configured schedule doesn't match what's actually
+installed/loaded, the same way it already warns about damaged disk
+chains and undiscovered VMs.
 
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
