@@ -101,9 +101,14 @@ Today, `Sync` only acts on a VM when `classifyAgent` would return
 `agentMissing` or `agentDiffers` — an `agentNotLoaded` VM falls through
 untouched (`continue`), since content already matches. This adds a third
 branch: `agentNotLoaded` still runs the existing running-check →
-`Bootout` (idempotent no-op, since it's not loaded) → `Bootstrap`
-sequence, but skips `Write` entirely (content's already correct on
-disk). `SyncResult` gains:
+`Write` → `Bootout` (idempotent no-op, since it's not loaded) →
+`Bootstrap` sequence. **Refined during planning:** rather than adding a
+second new `Installer` method just to fetch `agent`'s plist path
+without writing, `Write` is still called unconditionally on this
+branch too — its existing idempotency (`changed` is only true when
+content actually differs) already means no disk write occurs, and it's
+the only way any branch currently learns `plistPath` to pass to
+`Bootstrap`. `SyncResult` gains:
 
 ```go
 // Reloaded lists VM names whose on-disk plist content already matched
