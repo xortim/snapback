@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/launchd"
 	"github.com/xortim/snapback/internal/style"
 	"github.com/xortim/snapback/internal/vm"
 )
@@ -25,6 +27,8 @@ type statusDeps struct {
 	searchDirs    func() []string
 	discoverVMs   func(searchDirs []string) ([]discoveredVM, error)
 	newController func() (vm.Controller, error)
+	newInstaller  func() (launchd.Installer, error)
+	executable    func() (string, error)
 }
 
 func newStatusCmd() *cobra.Command {
@@ -35,6 +39,8 @@ func newStatusCmd() *cobra.Command {
 		searchDirs:    defaultVMSearchDirs,
 		discoverVMs:   discoverVMs,
 		newController: base.newController,
+		newInstaller:  defaultNewInstaller,
+		executable:    os.Executable,
 	})
 }
 
@@ -95,7 +101,10 @@ func runStatus(cmd *cobra.Command, deps statusDeps, vmName string) error {
 	if err := runStatusSummary(cmd, cfg.VMs, archives); err != nil {
 		return err
 	}
-	return warnDamagedDiskChains(cmd, deps, cfg.VMs)
+	if err := warnDamagedDiskChains(cmd, deps, cfg.VMs); err != nil {
+		return err
+	}
+	return warnScheduleDrift(cmd, deps, cfg.VMs)
 }
 
 // diskChainCheckResult is one VM's outcome from warnDamagedDiskChains'
@@ -190,6 +199,58 @@ func warnDamagedDiskChains(cmd *cobra.Command, deps statusDeps, vms []config.VM)
 			continue
 		}
 		if _, err := fmt.Fprint(cmd.ErrOrStderr(), msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// warnScheduleDrift checks vms against launchd's actual installed/loaded
+// state via launchd.CheckDrift, printing one line to stderr per drift
+// category per VM -- non-fatal, mirroring warnUndiscoveredVMs/
+// warnDamagedDiskChains. See ADR-006
+// (docs/superpowers/specs/2026-09-26-schedule-drift-detection-design.md).
+// A newInstaller/executable/CheckDrift failure is reported the same
+// non-fatal way rather than aborting status's core job of reporting
+// backup state. Not called for `status --vm <name>` -- same
+// summary-only scope cut runStatusForVM's own doc comment already
+// applies to other checks; the per-VM card has no natural place for a
+// fourth kind of note without cluttering it.
+func warnScheduleDrift(cmd *cobra.Command, deps statusDeps, vms []config.VM) error {
+	installer, err := deps.newInstaller()
+	if err != nil {
+		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
+		return ferr
+	}
+	binaryPath, err := deps.executable()
+	if err != nil {
+		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
+		return ferr
+	}
+	report, err := launchd.CheckDrift(installer, vms, binaryPath)
+	if err != nil {
+		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
+		return ferr
+	}
+
+	out := cmd.ErrOrStderr()
+	for _, name := range report.NotInstalled {
+		if _, err := fmt.Fprintf(out, "warning: %q's schedule is configured but no LaunchAgent is installed for it -- run `snapback schedule sync`\n", name); err != nil {
+			return err
+		}
+	}
+	for _, name := range report.OutOfSync {
+		if _, err := fmt.Fprintf(out, "warning: %q's installed LaunchAgent doesn't match config.yaml -- run `snapback schedule sync`\n", name); err != nil {
+			return err
+		}
+	}
+	for _, name := range report.NotLoaded {
+		if _, err := fmt.Fprintf(out, "warning: %q's LaunchAgent is installed but not loaded -- run `snapback schedule sync`\n", name); err != nil {
+			return err
+		}
+	}
+	for _, label := range report.Stale {
+		if _, err := fmt.Fprintf(out, "note: LaunchAgent %q has no matching VM in config.yaml -- run `snapback schedule sync` to remove it\n", launchd.ShortLabel(label)); err != nil {
 			return err
 		}
 	}
