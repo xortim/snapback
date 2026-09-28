@@ -219,18 +219,15 @@ func warnDamagedDiskChains(cmd *cobra.Command, deps statusDeps, vms []config.VM)
 func warnScheduleDrift(cmd *cobra.Command, deps statusDeps, vms []config.VM) error {
 	installer, err := deps.newInstaller()
 	if err != nil {
-		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
-		return ferr
+		return noteScheduleDriftErr(cmd, err)
 	}
 	binaryPath, err := deps.executable()
 	if err != nil {
-		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
-		return ferr
+		return noteScheduleDriftErr(cmd, err)
 	}
 	report, err := launchd.CheckDrift(installer, vms, binaryPath)
 	if err != nil {
-		_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
-		return ferr
+		return noteScheduleDriftErr(cmd, err)
 	}
 
 	out := cmd.ErrOrStderr()
@@ -255,6 +252,17 @@ func warnScheduleDrift(cmd *cobra.Command, deps statusDeps, vms []config.VM) err
 		}
 	}
 	return nil
+}
+
+// noteScheduleDriftErr prints warnScheduleDrift's shared non-fatal note
+// for any of its three failure points (newInstaller, executable,
+// CheckDrift) and returns the write's own error, if any -- err is
+// reported to the user via the note, not returned, matching
+// warnUndiscoveredVMs/warnDamagedDiskChains' same non-fatal handling of
+// a check failure.
+func noteScheduleDriftErr(cmd *cobra.Command, err error) error {
+	_, ferr := fmt.Fprintf(cmd.ErrOrStderr(), "note: could not check schedule drift: %v\n", err)
+	return ferr
 }
 
 // warnUndiscoveredVMs cross-references VM discovery against cfg's
