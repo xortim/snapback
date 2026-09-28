@@ -2,6 +2,7 @@ package launchd
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/xortim/snapback/internal/config"
@@ -159,6 +160,19 @@ func TestCheckDrift_NeverCallsMutatingMethods(t *testing.T) {
 		len(inst.BootoutCalls) != bootoutsBefore || len(inst.RemoveCalls) != removesBefore {
 		t.Errorf("CheckDrift made a mutating call -- Write/Bootstrap/Bootout/Remove counts changed from %d/%d/%d/%d",
 			writesBefore, bootstrapsBefore, bootoutsBefore, removesBefore)
+	}
+}
+
+func TestCheckDrift_CollidingNames_ErrorsInsteadOfMisleadingReport(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{
+		{Name: "My VM!", VMX: "/vms/a.vmx", Schedule: "daily"},
+		{Name: "My VM?", VMX: "/vms/b.vmx", Schedule: "daily"},
+	}
+
+	_, err := CheckDrift(inst, vms, "/bin/snapback")
+	if err == nil || !strings.Contains(err.Error(), "My VM!") || !strings.Contains(err.Error(), "My VM?") {
+		t.Errorf("CheckDrift() error = %v, want the collision surfaced naming both VMs", err)
 	}
 }
 

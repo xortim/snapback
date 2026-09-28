@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // FakeInstaller is an in-memory Installer for unit tests, mirroring
@@ -51,6 +52,12 @@ type FakeInstaller struct {
 
 	plists map[string][]byte // label -> last-written plist content
 	loaded map[string]bool   // label -> currently bootstrapped, per Bootstrap/Bootout
+
+	// mu guards every field above -- CheckDrift classifies scheduled VMs
+	// concurrently (see drift.go), so its Read/IsLoaded calls into this
+	// fake can arrive from multiple goroutines at once even though the
+	// real LaunchctlInstaller has no shared state to race on.
+	mu sync.Mutex
 }
 
 // NewFakeInstaller returns a FakeInstaller with nothing installed.
@@ -59,6 +66,8 @@ func NewFakeInstaller() *FakeInstaller {
 }
 
 func (f *FakeInstaller) Write(agent Agent) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.WriteCalls = append(f.WriteCalls, agent.Label)
 	f.Calls = append(f.Calls, "write:"+agent.Label)
 	if f.WriteErr != nil {
@@ -89,6 +98,8 @@ func labelFromFakePlistPath(plistPath string) string {
 }
 
 func (f *FakeInstaller) Bootstrap(plistPath string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.BootstrapCalls = append(f.BootstrapCalls, plistPath)
 	f.Calls = append(f.Calls, "bootstrap:"+plistPath)
 	if f.BootstrapErr != nil && (f.BootstrapFailAt == 0 || len(f.BootstrapCalls) == f.BootstrapFailAt) {
@@ -99,6 +110,8 @@ func (f *FakeInstaller) Bootstrap(plistPath string) error {
 }
 
 func (f *FakeInstaller) Bootout(label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.BootoutCalls = append(f.BootoutCalls, label)
 	f.Calls = append(f.Calls, "bootout:"+label)
 	if f.BootoutErr != nil {
@@ -109,6 +122,8 @@ func (f *FakeInstaller) Bootout(label string) error {
 }
 
 func (f *FakeInstaller) Remove(label string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.RemoveCalls = append(f.RemoveCalls, label)
 	f.Calls = append(f.Calls, "remove:"+label)
 	if f.RemoveErr != nil {
@@ -120,6 +135,8 @@ func (f *FakeInstaller) Remove(label string) error {
 }
 
 func (f *FakeInstaller) Read(label string) ([]byte, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.ReadCalls = append(f.ReadCalls, label)
 	f.Calls = append(f.Calls, "read:"+label)
 	if f.ReadErr != nil {
@@ -130,6 +147,8 @@ func (f *FakeInstaller) Read(label string) ([]byte, bool, error) {
 }
 
 func (f *FakeInstaller) List() ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.ListErr != nil {
 		return nil, f.ListErr
 	}
@@ -142,6 +161,8 @@ func (f *FakeInstaller) List() ([]string, error) {
 }
 
 func (f *FakeInstaller) IsLoaded(label string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.IsLoadedCalls = append(f.IsLoadedCalls, label)
 	f.Calls = append(f.Calls, "isloaded:"+label)
 	if f.IsLoadedErr != nil {

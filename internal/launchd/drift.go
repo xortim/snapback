@@ -2,6 +2,7 @@ package launchd
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/xortim/snapback/internal/config"
 )
@@ -29,13 +30,17 @@ func (r DriftReport) IsEmpty() bool {
 // Sync, built for `snapback status` to warn from (see ADR-006,
 // docs/superpowers/specs/2026-09-26-schedule-drift-detection-design.md).
 // Only List, Read, and IsLoaded are ever called;
-// Write/Bootstrap/Bootout/Remove never are. DetectCollisions is
-// deliberately not run here -- a colliding config is Sync's (and
-// persistConfigAndSync's) problem to reject before it's ever written,
-// not status's to re-diagnose.
+// Write/Bootstrap/Bootout/Remove never are. DetectCollisions is checked
+// first, the same as Sync -- otherwise two VM names that sanitize to the
+// same label would each be classified independently against one shared
+// on-disk plist, silently hiding the collision behind a misleading
+// per-VM drift report instead of surfacing it the way Sync would.
 func CheckDrift(installer Installer, vms []config.VM, binaryPath string) (DriftReport, error) {
-	var report DriftReport
+	if err := DetectCollisions(vms); err != nil {
+		return DriftReport{}, err
+	}
 
+	var scheduled []Agent
 	desiredLabels := make(map[string]bool)
 	for _, v := range vms {
 		if v.Schedule == "" {
@@ -46,18 +51,40 @@ func CheckDrift(installer Installer, vms []config.VM, binaryPath string) (DriftR
 			return DriftReport{}, err
 		}
 		desiredLabels[agent.Label] = true
+		scheduled = append(scheduled, agent)
+	}
 
-		state, err := classifyAgent(installer, agent)
-		if err != nil {
-			return DriftReport{}, err
+	// classifyAgent is subprocess-backed (IsLoaded shells out to
+	// launchctl) with no per-call timeout, so classifying every scheduled
+	// VM one at a time would turn a dozen-VM config into a serial chain
+	// of shell-outs -- the same reasoning internal/cli's
+	// warnDamagedDiskChains already applies to its own per-VM checks.
+	// Each goroutine writes only to its own index of states/errs, so no
+	// further synchronization is needed here.
+	states := make([]agentState, len(scheduled))
+	errs := make([]error, len(scheduled))
+	var wg sync.WaitGroup
+	for i, agent := range scheduled {
+		wg.Add(1)
+		go func(i int, agent Agent) {
+			defer wg.Done()
+			states[i], errs[i] = classifyAgent(installer, agent)
+		}(i, agent)
+	}
+	wg.Wait()
+
+	var report DriftReport
+	for i, agent := range scheduled {
+		if errs[i] != nil {
+			return DriftReport{}, errs[i]
 		}
-		switch state {
+		switch states[i] {
 		case agentMissing:
-			report.NotInstalled = append(report.NotInstalled, v.Name)
+			report.NotInstalled = append(report.NotInstalled, agent.VMName)
 		case agentDiffers:
-			report.OutOfSync = append(report.OutOfSync, v.Name)
+			report.OutOfSync = append(report.OutOfSync, agent.VMName)
 		case agentNotLoaded:
-			report.NotLoaded = append(report.NotLoaded, v.Name)
+			report.NotLoaded = append(report.NotLoaded, agent.VMName)
 		}
 	}
 
