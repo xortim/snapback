@@ -145,15 +145,19 @@ func (l *LaunchctlInstaller) IsLoaded(label string) (bool, error) {
 // the same tolerance to report false, nil rather than an error for an
 // unloaded label.
 //
-// Deliberately defensive: launchctl's exact wording here isn't
-// verifiable in this environment (no live macOS/launchd in CI), and it
-// has differed across releases -- "Could not find service" is what
-// `launchctl print` emits, while modern `bootout gui/<uid>/<label>` on
-// an unloaded label reports "Boot-out failed: 3: No such process" and
-// exits 3. All three forms are tolerated rather than betting on one.
-// TestIntegration_BootoutNeverBootstrapped (launchctl_integration_test.go,
-// behind -tags=integration + SNAPBACK_INTEGRATION=1) is where this
-// should eventually be confirmed against real launchd.
+// Deliberately tolerant of more than one form, since launchctl's exact
+// wording has differed across releases and isn't guaranteed to hold on
+// every future one either -- confirmed against real launchd on macOS
+// (Darwin 27.0.0) on 2026-09-27: `launchctl print gui/<uid>/<unloaded
+// label>` exits 113 with "Bad request.\nCould not find service ... in
+// domain for user gui: 501", while `launchctl bootout
+// gui/<uid>/<unloaded label>` exits 3 with "Boot-out failed: 3: No such
+// process". Both are covered by the message-substring checks below
+// without relying on either's exact exit code, which is why exit code 3
+// is tolerated defensively but not required. TestIntegration_IsLoaded_
+// ReflectsBootstrapAndBootout and TestIntegration_BootoutNeverBootstrapped
+// (launchctl_integration_test.go, behind -tags=integration +
+// SNAPBACK_INTEGRATION=1) exercise both paths against real launchd.
 func isNotLoadedError(err error) bool {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {

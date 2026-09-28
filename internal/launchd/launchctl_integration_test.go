@@ -86,13 +86,13 @@ func TestIntegration_IsLoaded_ReflectsBootstrapAndBootout(t *testing.T) {
 	}
 }
 
-// TestIntegration_BootoutNeverBootstrapped is the one place the
-// "not loaded" tolerance in LaunchctlInstaller.Bootout (isNotLoadedError)
-// can actually be confirmed: the exact message and exit code launchctl
-// emits for an unloaded label aren't reproducible without real launchd,
-// so the implementation tolerates several known forms defensively. If
-// this test ever fails, launchctl is reporting something none of those
-// forms match -- add it there rather than relaxing this assertion.
+// TestIntegration_BootoutNeverBootstrapped, together with
+// TestIntegration_IsLoaded_ReflectsBootstrapAndBootout above, confirm
+// the "not loaded" tolerance in isNotLoadedError against real launchd
+// (see its doc comment in installer.go for the exact exit codes/messages
+// observed). If either test ever fails, launchctl is reporting something
+// none of the tolerated forms match -- add it there rather than relaxing
+// either assertion.
 func TestIntegration_BootoutNeverBootstrapped(t *testing.T) {
 	requireIntegration(t)
 	inst := &launchd.LaunchctlInstaller{Dir: t.TempDir()}
