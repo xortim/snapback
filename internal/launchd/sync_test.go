@@ -121,10 +121,14 @@ func TestSync_AlreadyInSync_IsANoOp(t *testing.T) {
 	if len(inst.BootoutCalls) != bootoutsAfterFirst {
 		t.Errorf("BootoutCalls after two Syncs = %v, want no new call from the second Sync", inst.BootoutCalls)
 	}
-	// Nothing at all beyond the Read the change-detection needs -- no
-	// Write, since nothing changed.
-	if got := inst.Calls[callsAfterFirst:]; len(got) != 1 || got[0] != "read:com.tim.snapback.dev" {
-		t.Errorf("second Sync() made calls %v, want only the change-detecting Read", got)
+	// Nothing at all beyond the Read+IsLoaded change-detection needs --
+	// no Write, since nothing changed and it's already loaded. IsLoaded
+	// is a new consultation as of the agentNotLoaded self-heal branch:
+	// an already-in-sync VM still needs its loaded state checked every
+	// time, precisely so a *not*-loaded one doesn't silently pass as
+	// "no-op" forever.
+	if got := inst.Calls[callsAfterFirst:]; len(got) != 2 || got[0] != "read:com.tim.snapback.dev" || got[1] != "isloaded:com.tim.snapback.dev" {
+		t.Errorf("second Sync() made calls %v, want only the change-detecting Read followed by the loaded-state check", got)
 	}
 }
 
@@ -596,6 +600,85 @@ func TestSync_InstallPath_SkipsWhenRunning(t *testing.T) {
 	}
 	if len(inst.WriteCalls) != 0 || len(inst.BootstrapCalls) != 0 || len(inst.BootoutCalls) != 0 {
 		t.Errorf("Write/Bootstrap/Bootout called = %v/%v/%v, want none while the (possibly loaded) job might be running", inst.WriteCalls, inst.BootstrapCalls, inst.BootoutCalls)
+	}
+}
+
+func TestSync_NotLoadedButContentMatches_ReBootstraps(t *testing.T) {
+	// Simulates a manual `launchctl bootout` (or an interrupted prior
+	// sync) leaving a correct plist on disk but not actually loaded --
+	// Sync must still notice and re-bootstrap it, not read "content
+	// matches" as "nothing to do."
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	label := "com.tim.snapback.dev"
+	if err := inst.Bootout(label); err != nil {
+		t.Fatalf("simulated manual Bootout() error = %v", err)
+	}
+	bootstrapsAfterInstall := len(inst.BootstrapCalls)
+
+	result, err := Sync(inst, vms, "/bin/snapback", neverRunning)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if len(result.Reloaded) != 1 || result.Reloaded[0] != "dev" {
+		t.Errorf("result.Reloaded = %v, want [\"dev\"]", result.Reloaded)
+	}
+	if len(result.Installed) != 0 || len(result.Updated) != 0 {
+		t.Errorf("result.Installed/Updated = %v/%v, want both empty -- content never changed", result.Installed, result.Updated)
+	}
+	if len(inst.BootstrapCalls) != bootstrapsAfterInstall+1 {
+		t.Errorf("BootstrapCalls = %v, want exactly one new call to re-load the job", inst.BootstrapCalls)
+	}
+	loaded, err := inst.IsLoaded(label)
+	if err != nil {
+		t.Fatalf("IsLoaded() error = %v", err)
+	}
+	if !loaded {
+		t.Error("IsLoaded() = false after the self-heal Sync, want true")
+	}
+}
+
+func TestSync_NotLoaded_SkipsWhenBackupCurrentlyRunning(t *testing.T) {
+	inst := NewFakeInstaller()
+	vms := []config.VM{{Name: "dev", VMX: "/vms/dev.vmx", Schedule: "daily"}}
+	if _, err := Sync(inst, vms, "/bin/snapback", neverRunning); err != nil {
+		t.Fatalf("first Sync() error = %v", err)
+	}
+	label := "com.tim.snapback.dev"
+	if err := inst.Bootout(label); err != nil {
+		t.Fatalf("simulated manual Bootout() error = %v", err)
+	}
+	bootstrapsAfterInstall := len(inst.BootstrapCalls)
+
+	stillRunning := func(name string) (bool, error) {
+		if name != "dev" {
+			t.Errorf("isRunning called with %q, want %q", name, "dev")
+		}
+		return true, nil
+	}
+	result, err := Sync(inst, vms, "/bin/snapback", stillRunning)
+	if err != nil {
+		t.Fatalf("second Sync() error = %v", err)
+	}
+	if len(result.Skipped) != 1 || result.Skipped[0] != "dev" {
+		t.Errorf("result.Skipped = %v, want [\"dev\"]", result.Skipped)
+	}
+	if len(result.Reloaded) != 0 {
+		t.Errorf("result.Reloaded = %v, want none while running", result.Reloaded)
+	}
+	if len(inst.BootstrapCalls) != bootstrapsAfterInstall {
+		t.Errorf("BootstrapCalls = %v, want no new call while the backup is in progress", inst.BootstrapCalls)
+	}
+
+	result, err = Sync(inst, vms, "/bin/snapback", neverRunning)
+	if err != nil {
+		t.Fatalf("third Sync() error = %v", err)
+	}
+	if len(result.Reloaded) != 1 || result.Reloaded[0] != "dev" {
+		t.Errorf("third Sync() result.Reloaded = %v, want [\"dev\"] once no longer running", result.Reloaded)
 	}
 }
 

@@ -47,6 +47,13 @@ type Installer interface {
 	// filesystem round-trip) on every Sync even when nothing needed to
 	// change.
 	Read(label string) (data []byte, ok bool, err error)
+	// IsLoaded reports whether label is currently bootstrapped into the
+	// GUI launchd domain, independent of whether a plist for it exists
+	// on disk -- List reports disk state, IsLoaded reports load state,
+	// and a label can be true for one and false for the other in either
+	// direction (see ADR-006,
+	// docs/superpowers/specs/2026-09-26-schedule-drift-detection-design.md).
+	IsLoaded(label string) (bool, error)
 }
 
 // LaunchctlInstaller is the real Installer, shelling out to launchctl
@@ -118,21 +125,39 @@ func (l *LaunchctlInstaller) Bootout(label string) error {
 	return err
 }
 
-// isNotLoadedError reports whether err from `launchctl bootout` means
-// "that label wasn't loaded in the first place" rather than a real
-// failure. Sync's contract is idempotent removal (and, since the install
-// path also boots out defensively before bootstrapping, idempotent
-// install), so this must not surface as an error.
+func (l *LaunchctlInstaller) IsLoaded(label string) (bool, error) {
+	err := runLaunchctl("print", guiDomain()+"/"+label)
+	if err != nil {
+		if isNotLoadedError(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// isNotLoadedError reports whether err from `launchctl bootout` or
+// `launchctl print` (IsLoaded's own call) means "that label wasn't
+// loaded in the first place" rather than a real failure. Sync's
+// contract is idempotent removal (and, since the install path also
+// boots out defensively before bootstrapping, idempotent install), so
+// this must not surface as an error from Bootout; IsLoaded relies on
+// the same tolerance to report false, nil rather than an error for an
+// unloaded label.
 //
-// Deliberately defensive: launchctl's exact wording here isn't
-// verifiable in this environment (no live macOS/launchd in CI), and it
-// has differed across releases -- "Could not find service" is what
-// `launchctl print` emits, while modern `bootout gui/<uid>/<label>` on
-// an unloaded label reports "Boot-out failed: 3: No such process" and
-// exits 3. All three forms are tolerated rather than betting on one.
-// TestIntegration_BootoutNeverBootstrapped (launchctl_integration_test.go,
-// behind -tags=integration + SNAPBACK_INTEGRATION=1) is where this
-// should eventually be confirmed against real launchd.
+// Deliberately tolerant of more than one form, since launchctl's exact
+// wording has differed across releases and isn't guaranteed to hold on
+// every future one either -- confirmed against real launchd on macOS
+// (Darwin 27.0.0) on 2026-09-27: `launchctl print gui/<uid>/<unloaded
+// label>` exits 113 with "Bad request.\nCould not find service ... in
+// domain for user gui: 501", while `launchctl bootout
+// gui/<uid>/<unloaded label>` exits 3 with "Boot-out failed: 3: No such
+// process". Both are covered by the message-substring checks below
+// without relying on either's exact exit code, which is why exit code 3
+// is tolerated defensively but not required. TestIntegration_IsLoaded_
+// ReflectsBootstrapAndBootout and TestIntegration_BootoutNeverBootstrapped
+// (launchctl_integration_test.go, behind -tags=integration +
+// SNAPBACK_INTEGRATION=1) exercise both paths against real launchd.
 func isNotLoadedError(err error) bool {
 	var exitErr *exec.ExitError
 	if errors.As(err, &exitErr) && exitErr.ExitCode() == 3 {
