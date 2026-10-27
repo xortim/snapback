@@ -52,8 +52,9 @@ What exists today:
    redundant. Non-TTY covers launchd runs and also manual runs piped or
    redirected to a file, which is acceptable — nobody is watching those
    either.
-2. **Success is configurable.** New `notifications.on_success` (default
-   `true`). Failures always notify when notifications are enabled.
+2. **Success is configurable.** New `notifications.on_success`, which
+   `init` writes as `true`. Failures always notify when notifications
+   are enabled.
 3. **Notify from the CLI, not the choreography.** Notification happens
    in `internal/cli`'s `runVM`, after the plain dispatch path completes.
    Alternatives rejected:
@@ -141,10 +142,10 @@ type Notifications struct {
 }
 ```
 
-- `config.Load` defaults `on_success` to `true` when the key is absent
-  (checked with `k.Exists("notifications.on_success")` before
-  unmarshal), so every existing config.yaml keeps notifying on success
-  once enabled. An explicit `on_success: false` is honored.
+- No load-time default: snapback has no installed base yet, so there
+  is no pre-`on_success` config.yaml to keep compatible. An absent key
+  is Go's zero value, `false` (no success notifications) — `init` always
+  writes the key explicitly, so this only affects hand-written configs.
 - `config.Marshal` always writes the key (no `omitempty`).
 - The `init` wizard does **not** gain a second prompt. A fresh init
   writes `on_success: true`; a re-run carries `prior.Notifications.OnSuccess`
@@ -233,8 +234,8 @@ All unit tests run without `osascript`:
   - Message builders: success content; failure first-line extraction;
     200-rune truncation with `…`; cleanup suffix appended after
     truncation.
-- `internal/config`: `on_success` absent → `true`; explicit `false` →
-  `false`; `Marshal` emits the key.
+- `internal/config`: `on_success: true` parses; `Marshal` emits the
+  key.
 - `internal/cli` run: table test over `enabled` × TTY × `on_success` ×
   success/failure using `notify.Fake`, asserting send/no-send and
   content; VM-not-found notifies; a notifier error yields a stderr

@@ -4,7 +4,7 @@
 
 **Goal:** A `snapback run` nobody is watching (non-TTY, e.g. launchd) sends a macOS notification on failure — and on success unless `notifications.on_success: false` — plus a `snapback notify test` command to get the notification permission granted.
 
-**Architecture:** New `internal/notify` package (a `Notifier` interface, a real `OSAScript` implementation that passes all user strings as `osascript` argv, a `Fake`, and pure message builders). `internal/cli`'s `runVM` decides whether to notify after the backup outcome is known; the choreography (`internal/backup`) is untouched. Config gains `notifications.on_success`, defaulting to `true` when absent.
+**Architecture:** New `internal/notify` package (a `Notifier` interface, a real `OSAScript` implementation that passes all user strings as `osascript` argv, a `Fake`, and pure message builders). `internal/cli`'s `runVM` decides whether to notify after the backup outcome is known; the choreography (`internal/backup`) is untouched. Config gains `notifications.on_success`, which `init` writes as `true` (no load-time default — there is no installed base yet).
 
 **Tech Stack:** Go 1.26.5, cobra, koanf, `/usr/bin/osascript`.
 
@@ -27,7 +27,7 @@
 - A VM name or error message containing `"`, `\`, newlines, or `& do shell script` — must reach `osascript` only as argv, never inside an `-e` script line (Task 1 test).
 - A multi-line or very long error (e.g. wrapped vmcli stderr) — message must be the first line only, ≤200 runes, and the cleanup hint must survive truncation (Task 2 test).
 - A non-TTY run interrupted by SIGINT (context canceled) — the failure notification must still be attempted rather than failing instantly on the canceled context (Task 4 uses `context.WithoutCancel`; test asserts the ctx passed to `Notify` is not canceled).
-- An existing config.yaml with no `on_success` key — must keep notifying on success once enabled (Task 3 test).
+- A fresh `init` — must write `on_success: true` so success notifications work out of the box (Task 3 test).
 - A re-run of `init --force` over a config with `on_success: false` — must not silently flip it back to `true` (Task 3 test).
 
 ---
@@ -41,7 +41,7 @@
 | `internal/notify/message.go` (create) | `Success`, `Failure` builders |
 | `internal/notify/notify_test.go`, `message_test.go`, `fake_test.go` (create) | unit tests |
 | `internal/notify/osascript_integration_test.go` (create) | one real `osascript` call, `integration` tag |
-| `internal/config/config.go` (modify) | `Notifications.OnSuccess`, default in `Load` |
+| `internal/config/config.go` (modify) | `Notifications.OnSuccess` |
 | `internal/tui/init.go` (modify) | carry `OnSuccess` through the wizard |
 | `internal/cli/run.go` (modify) | `newNotifier` dep, `snapshotMayRemain`, `notifyRunOutcome` |
 | `internal/cli/notify.go` (create) | `snapback notify test` |
@@ -574,48 +574,26 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ### Task 3: Config `on_success` + wizard carry-through
 
 **Files:**
-- Modify: `internal/config/config.go` (`Notifications` struct ~line 36; `Load` after `k.Unmarshal`)
+- Modify: `internal/config/config.go` (`Notifications` struct ~line 36)
 - Modify: `internal/tui/init.go` (`coreSettings` ~line 134; `promptCoreSettings` ~lines 163-171 and return ~line 213; config build ~line 547)
 - Test: `internal/config/config_test.go`, `internal/config/marshal_test.go`, `internal/tui/init_test.go`
 
 **Interfaces:**
-- Produces: `config.Notifications{Enabled bool; OnSuccess bool}` — yaml/koanf key `on_success`; `Load` sets `OnSuccess = true` when the key is absent.
+- Produces: `config.Notifications{Enabled bool; OnSuccess bool}` — yaml/koanf key `on_success`. No load-time default (absent = `false`).
 
 - [ ] **Step 1: Write the failing tests**
 
 Append to `internal/config/config_test.go` (uses the existing `writeTempConfig` helper):
 
 ```go
-func TestLoad_OnSuccessAbsent_DefaultsTrue(t *testing.T) {
-	path := writeTempConfig(t, "destination: /d\nnotifications:\n  enabled: true\n")
+func TestLoad_OnSuccessParses(t *testing.T) {
+	path := writeTempConfig(t, "destination: /d\nnotifications:\n  enabled: true\n  on_success: true\n")
 	cfg, err := config.Load(path)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
 	if !cfg.Notifications.OnSuccess {
-		t.Error("OnSuccess = false, want true when on_success is absent")
-	}
-}
-
-func TestLoad_NoNotificationsBlock_OnSuccessDefaultsTrue(t *testing.T) {
-	path := writeTempConfig(t, "destination: /d\n")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !cfg.Notifications.OnSuccess {
-		t.Error("OnSuccess = false, want true when notifications block is absent")
-	}
-}
-
-func TestLoad_OnSuccessExplicitFalse_Honored(t *testing.T) {
-	path := writeTempConfig(t, "destination: /d\nnotifications:\n  enabled: true\n  on_success: false\n")
-	cfg, err := config.Load(path)
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if cfg.Notifications.OnSuccess {
-		t.Error("OnSuccess = true, want explicit false honored")
+		t.Error("OnSuccess = false, want true")
 	}
 }
 ```
@@ -686,20 +664,11 @@ Expected: FAIL — `OnSuccess` field undefined.
 type Notifications struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled"`
 	// OnSuccess controls whether a successful unattended run notifies;
-	// failures always notify when Enabled. Load defaults it to true when
-	// the key is absent so configs written before it existed keep
-	// notifying on success -- see
+	// failures always notify when Enabled. init writes it as true; there
+	// is deliberately no load-time default -- see
 	// docs/superpowers/specs/2026-10-26-run-notifications-design.md.
 	OnSuccess bool `koanf:"on_success" yaml:"on_success"`
 }
-```
-
-In `Load`, immediately after the `k.Unmarshal("", &cfg)` error check:
-
-```go
-	if !k.Exists("notifications.on_success") {
-		cfg.Notifications.OnSuccess = true
-	}
 ```
 
 `internal/tui/init.go`:
@@ -712,14 +681,14 @@ No prompt is added — the wizard's question count is unchanged.
 - [ ] **Step 4: Run to verify pass**
 
 Run: `go test ./internal/config/... ./internal/tui/... -v`
-Expected: PASS (including all pre-existing tests; `TestLoad_ParsesFullConfig` etc. are unaffected).
+Expected: PASS (including all pre-existing tests).
 
 - [ ] **Step 5: Lint, test, commit**
 
 ```bash
 make lint && make test
 git add internal/config internal/tui
-git commit -m "feat(config): add notifications.on_success, defaulting to true
+git commit -m "feat(config): add notifications.on_success
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ```
@@ -1372,7 +1341,7 @@ Expected: SKIP (without `SNAPBACK_INTEGRATION=1`). Do **not** run with `SNAPBACK
 `docs/design.md`:
 - Choreography list step 12 → `12. (run command, after the choreography) osascript notification: success/failure — only when stdout isn't a terminal; see the run-notifications spec`.
 - Command Reference table: add row `| \`snapback notify test\` | Send a sample notification regardless of config, so macOS prompts for (Script Editor) notification permission while you're at the machine |` after the `schedule sync` row.
-- Config Reference YAML: under `notifications:` add `  on_success: true # failures always notify when enabled; defaults to true if omitted`, and one sentence after the `schedule` paragraph: "`notifications.enabled` gates notifications for unattended (non-terminal) `run`s; failures always notify, successes only when `on_success` is true (the default when omitted). Notifications go through `osascript`, so macOS shows them under Script Editor — run `snapback notify test` once to get that permission granted."
+- Config Reference YAML: under `notifications:` add `  on_success: true # failures always notify when enabled`, and one sentence after the `schedule` paragraph: "`notifications.enabled` gates notifications for unattended (non-terminal) `run`s; failures always notify, successes only when `on_success` is true (as `init` writes it). Notifications go through `osascript`, so macOS shows them under Script Editor — run `snapback notify test` once to get that permission granted."
 - Phase 2 paragraph: replace "osascript success/failure notifications are split out to [#86](...) (`progress.Notifying` is still a stage nothing fires)" with "osascript success/failure notifications were split out to [#86](...) and have since shipped ([spec](superpowers/specs/2026-10-26-run-notifications-design.md))".
 
 `CLAUDE.md` — in the Phase 2 paragraph replace "osascript notifications (split to #86, `progress.Notifying` still fires nothing)" with "osascript notifications (split to #86, since landed: `internal/notify` behind a `Notifier` interface with a `Fake`, sent by `run` only when stdout isn't a terminal, gated by `notifications.enabled`/`on_success`, plus `snapback notify test` for the Script Editor permission prompt)". Add `internal/notify` to the "Real Go source exists under" list.
