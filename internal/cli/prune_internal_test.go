@@ -2,7 +2,9 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -125,7 +127,7 @@ func TestPruneCmd_LockedVM_SkippedNotFailed(t *testing.T) {
 	var pruned []string
 	deps := pruneDeps{
 		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
-		prune: func(dest, vmName string, p retention.Policy, now time.Time, dryRun bool) (backup.PruneResult, error) {
+		prune: func(_ context.Context, dest, vmName string, p retention.Policy, now time.Time, dryRun bool) (backup.PruneResult, error) {
 			if vmName == "a" {
 				return backup.PruneResult{}, fmt.Errorf("%w: %q", backup.ErrLocked, vmName)
 			}
@@ -151,7 +153,7 @@ func TestPruneCmd_RemovalError_NonZeroExit(t *testing.T) {
 	cfg := &config.Config{Destination: t.TempDir(), Retention: config.Retention{KeepLast: 1}, VMs: []config.VM{{Name: "a"}}}
 	deps := pruneDeps{
 		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
-		prune: func(string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
+		prune: func(context.Context, string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
 			return backup.PruneResult{Errs: []error{errBoom}}, nil
 		},
 		now: func() time.Time { return pruneTestNow },
@@ -184,7 +186,7 @@ func TestPruneCmd_RemovalFailure_ShowsRemoveFailed(t *testing.T) {
 	}
 	deps := pruneDeps{
 		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
-		prune: func(string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
+		prune: func(context.Context, string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
 			return backup.PruneResult{
 				Kept:    []backup.PrunedArchive{arch("a-3", nil)},
 				Removed: []backup.PrunedArchive{arch("a-1", nil), arch("a-2", errBoom)},
@@ -202,5 +204,51 @@ func TestPruneCmd_RemovalFailure_ShowsRemoveFailed(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("stdout = %q, want %q", out, want)
 		}
+	}
+}
+
+func TestPruneCmd_Interrupted_StopsAndReports(t *testing.T) {
+	cfg := &config.Config{Destination: t.TempDir(), Retention: config.Retention{KeepLast: 1}, VMs: []config.VM{{Name: "a"}, {Name: "b"}}}
+	var pruned []string
+	deps := pruneDeps{
+		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
+		prune: func(_ context.Context, _, vmName string, _ retention.Policy, _ time.Time, _ bool) (backup.PruneResult, error) {
+			pruned = append(pruned, vmName)
+			done := backup.PrunedArchive{Archive: backup.Archive{ArchiveID: "a-1"}}
+			return backup.PruneResult{Removed: []backup.PrunedArchive{done}}, fmt.Errorf("prune interrupted: %w", context.Canceled)
+		},
+		now: func() time.Time { return pruneTestNow },
+	}
+
+	_, stderr, err := execPrune(t, deps)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute() error = %v, want context.Canceled", err)
+	}
+	if len(pruned) != 1 || pruned[0] != "a" {
+		t.Errorf("pruned = %v, want [a] only (stop after interruption)", pruned)
+	}
+	if !strings.Contains(stderr, `prune "a" interrupted after removing 1 archive(s)`) {
+		t.Errorf("stderr = %q, want an interrupted notice", stderr)
+	}
+}
+
+func TestPruneCmd_SymlinkFailure_LabelledInTable(t *testing.T) {
+	cfg := &config.Config{Destination: t.TempDir(), Retention: config.Retention{KeepLast: 1}, VMs: []config.VM{{Name: "a"}}}
+	symErr := fmt.Errorf("prune x: %w to y", backup.ErrSymlinkedArchive)
+	deps := pruneDeps{
+		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
+		prune: func(context.Context, string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
+			a := backup.PrunedArchive{Archive: backup.Archive{ArchiveID: "a-1", Manifest: backup.Manifest{VMName: "a", Timestamp: pruneTestNow}}, Err: symErr}
+			return backup.PruneResult{Removed: []backup.PrunedArchive{a}, Errs: []error{symErr}}, nil
+		},
+		now: func() time.Time { return pruneTestNow },
+	}
+
+	out, _, err := execPrune(t, deps)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil")
+	}
+	if !strings.Contains(out, "remove failed (symlink, see below)") {
+		t.Errorf("stdout = %q, want the symlink failure labelled", out)
 	}
 }

@@ -152,8 +152,17 @@ func pruneLocked(destination, vmName string, p retention.Policy, now time.Time, 
   follows a symlinked archive directory, and removing `manifest.json`
   through the link would delete inside the link's target. `pruneLocked`
   `os.Lstat`s each to-be-removed path first. If it's a symlink, the
-  archive is left alone and an error naming it goes in `Errs`. It still
-  counts as `Removed` for decision purposes, so it isn't shown as kept.
+  archive is left alone and an error wrapping `ErrSymlinkedArchive` goes
+  in `Errs`, naming the link's target and the by-hand removal (`rm` the
+  link, then `rm -r` the target). It still counts as `Removed` for
+  decision purposes, so it isn't shown as kept; `snapback prune` labels
+  it `remove failed (symlink, see below)`.
+- **Cancellation:** `Prune`/`pruneLocked` take a `context.Context` and
+  check it before each removal. On Ctrl-C the archives already removed
+  stay removed, the rest are left in place, and the partial result comes
+  back with an error wrapping `ctx.Err()`. Under `Run` that surfaces as
+  the usual non-fatal prune warning; `snapback prune` reports how many
+  it removed before stopping and doesn't move on to the next VM.
 
 ### `backup.Run` changes
 

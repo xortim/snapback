@@ -459,7 +459,7 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	// startTime: day/week buckets are computed in now's location (local
 	// time in production), and startTime was forced to UTC.
 	reporter.Report(progress.Event{Stage: progress.Pruning, Message: "pruning old archives"})
-	pruneRes, pruneErr := pruneLocked(opts.Destination, opts.VMName, opts.Retention, now(), false)
+	pruneRes, pruneErr := pruneLocked(ctx, opts.Destination, opts.VMName, opts.Retention, now(), false)
 	if len(pruneRes.Errs) > 0 {
 		pruneErr = errors.Join(append([]error{pruneErr}, pruneRes.Errs...)...)
 	}

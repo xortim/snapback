@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ func TestPrune_RemovesBeyondPolicy_OnlyNamedVM(t *testing.T) {
 	writeTestManifest(t, dest, "myvm-3", Manifest{VMName: "myvm", Timestamp: day(3)})
 	writeTestManifest(t, dest, "other-1", Manifest{VMName: "other", Timestamp: day(1)})
 
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -77,7 +78,7 @@ func TestPrune_RemovesBeyondPolicy_OnlyNamedVM(t *testing.T) {
 func TestPrune_KeptCarriesReasons(t *testing.T) {
 	dest := t.TempDir()
 	writeTestManifest(t, dest, "myvm-1", Manifest{VMName: "myvm", Timestamp: day(28)})
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -92,7 +93,7 @@ func TestPrune_PrefixNamedVMNotConsidered(t *testing.T) {
 	writeTestManifest(t, dest, "ubuntu-dev-20261002T000000Z", Manifest{VMName: "ubuntu-dev", Timestamp: day(2)})
 	writeTestManifest(t, dest, "ubuntu-dev-20261003T000000Z", Manifest{VMName: "ubuntu-dev", Timestamp: day(3)})
 
-	res, err := Prune(dest, "ubuntu", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "ubuntu", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -113,7 +114,7 @@ func TestPrune_DirWithoutManifestSurvives(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false); err != nil {
+	if _, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false); err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
 	if _, err := os.Stat(stray); err != nil {
@@ -126,7 +127,7 @@ func TestPrune_DryRunDeletesNothing(t *testing.T) {
 	writeTestManifest(t, dest, "myvm-1", Manifest{VMName: "myvm", Timestamp: day(1)})
 	writeTestManifest(t, dest, "myvm-2", Manifest{VMName: "myvm", Timestamp: day(2)})
 
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, true)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, true)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -150,7 +151,7 @@ func TestPrune_ManifestRemoveFails_ArchiveIntactOthersStillRemoved(t *testing.T)
 	}
 	t.Cleanup(func() { _ = os.Chmod(locked, 0o700) })
 
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -184,7 +185,7 @@ func TestPrune_PartialRemoveAll_LeavesUnlistedDirAndReportsPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(sub, 0o700) })
 
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
@@ -206,15 +207,22 @@ func TestPrune_SymlinkedArchiveNotDeleted(t *testing.T) {
 	}
 	writeTestManifest(t, dest, "myvm-2", Manifest{VMName: "myvm", Timestamp: day(2)})
 
-	res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("Prune() error = %v", err)
 	}
 	if got := ids(res.Removed); !slices.Equal(got, []string{"myvm-1"}) {
 		t.Errorf("Removed = %v, want [myvm-1] (decided removed, even though not deleted)", got)
 	}
-	if len(res.Errs) != 1 || !strings.Contains(res.Errs[0].Error(), "symlink") {
-		t.Errorf("Errs = %v, want one symlink error", res.Errs)
+	if len(res.Errs) != 1 || !errors.Is(res.Errs[0], ErrSymlinkedArchive) {
+		t.Fatalf("Errs = %v, want one ErrSymlinkedArchive", res.Errs)
+	}
+	// The error has to tell the operator what to do: name the link's
+	// target and the by-hand removal.
+	for _, want := range []string{filepath.Join(target, "real"), "rm " + `"` + link + `"`, "rm -r"} {
+		if !strings.Contains(res.Errs[0].Error(), want) {
+			t.Errorf("symlink error = %q, want it to contain %q", res.Errs[0], want)
+		}
 	}
 	if len(res.Removed) != 1 || res.Removed[0].Err == nil {
 		t.Errorf("Removed = %+v, want the symlinked entry to carry Err", res.Removed)
@@ -242,7 +250,7 @@ func TestPrune_LockHeld_ReturnsErrLockedAndDeletesNothing(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = lock.Release() })
 
-	_, err = Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	_, err = Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if !errors.Is(err, ErrLocked) {
 		t.Fatalf("Prune() error = %v, want ErrLocked", err)
 	}
@@ -253,7 +261,7 @@ func TestPrune_LockHeld_ReturnsErrLockedAndDeletesNothing(t *testing.T) {
 
 func TestPrune_MissingDestination_NoArchivesNoError(t *testing.T) {
 	dest := filepath.Join(t.TempDir(), "never-created")
-	res, err := pruneLocked(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	res, err := pruneLocked(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
 	if err != nil {
 		t.Fatalf("pruneLocked() error = %v, want nil", err)
 	}
@@ -265,7 +273,7 @@ func TestPrune_MissingDestination_NoArchivesNoError(t *testing.T) {
 func TestPrune_MissingDestination_DoesNotCreateIt(t *testing.T) {
 	for _, dryRun := range []bool{false, true} {
 		dest := filepath.Join(t.TempDir(), "unmounted-drive")
-		res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, dryRun)
+		res, err := Prune(t.Context(), dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, dryRun)
 		if err != nil {
 			t.Fatalf("dryRun=%v: Prune() error = %v, want nil", dryRun, err)
 		}
@@ -275,5 +283,42 @@ func TestPrune_MissingDestination_DoesNotCreateIt(t *testing.T) {
 		if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("dryRun=%v: destination created (stat err = %v)", dryRun, err)
 		}
+	}
+}
+
+func TestPrune_CancelledContext_RemovesNothingReportsInterrupted(t *testing.T) {
+	dest := t.TempDir()
+	writeTestManifest(t, dest, "myvm-1", Manifest{VMName: "myvm", Timestamp: day(1)})
+	writeTestManifest(t, dest, "myvm-2", Manifest{VMName: "myvm", Timestamp: day(2)})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	res, err := Prune(ctx, dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, false)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Prune() error = %v, want context.Canceled", err)
+	}
+	if len(res.Removed) != 0 {
+		t.Errorf("Removed = %v, want none after cancellation", ids(res.Removed))
+	}
+	got := listedIDs(t, dest)
+	slices.Sort(got)
+	if !slices.Equal(got, []string{"myvm-1", "myvm-2"}) {
+		t.Errorf("listed = %v, want both untouched", got)
+	}
+}
+
+func TestPrune_CancelledContext_DryRunUnaffected(t *testing.T) {
+	dest := t.TempDir()
+	writeTestManifest(t, dest, "myvm-1", Manifest{VMName: "myvm", Timestamp: day(1)})
+	writeTestManifest(t, dest, "myvm-2", Manifest{VMName: "myvm", Timestamp: day(2)})
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	res, err := Prune(ctx, dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, true)
+	if err != nil {
+		t.Fatalf("Prune() error = %v, want nil (dry run deletes nothing to interrupt)", err)
+	}
+	if got := ids(res.Removed); !slices.Equal(got, []string{"myvm-1"}) {
+		t.Errorf("Removed = %v, want [myvm-1]", got)
 	}
 }

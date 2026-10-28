@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -20,7 +21,7 @@ import (
 // error), and the clock.
 type pruneDeps struct {
 	loadConfig func(path string) (*config.Config, error)
-	prune      func(destination, vmName string, p retention.Policy, now time.Time, dryRun bool) (backup.PruneResult, error)
+	prune      func(ctx context.Context, destination, vmName string, p retention.Policy, now time.Time, dryRun bool) (backup.PruneResult, error)
 	now        func() time.Time
 }
 
@@ -70,7 +71,13 @@ func runPrune(cmd *cobra.Command, deps pruneDeps, vmName string, dryRun bool) er
 	now := deps.now()
 	failed := 0
 	for _, v := range vms {
-		res, err := deps.prune(cfg.Destination, v.Name, policy, now, dryRun)
+		res, err := deps.prune(cmd.Context(), cfg.Destination, v.Name, policy, now, dryRun)
+		if errors.Is(err, context.Canceled) {
+			// Stop here rather than moving on to the next VM: the
+			// operator asked to stop.
+			_, _ = fmt.Fprintf(errOut, "prune %q interrupted after removing %d archive(s); the rest were left in place\n", v.Name, removedCount(res))
+			return err
+		}
 		if errors.Is(err, backup.ErrLocked) {
 			_, _ = fmt.Fprintf(out, "backup for %q may be in progress (lock held); skipping\n", v.Name)
 			continue
@@ -112,19 +119,17 @@ func printPruneResult(w io.Writer, vmName string, res backup.PruneResult, dryRun
 		}
 		for _, a := range res.Removed {
 			action := removeVerb
-			if a.Err != nil {
+			switch {
+			case errors.Is(a.Err, backup.ErrSymlinkedArchive):
+				action = "remove failed (symlink, see below)"
+			case a.Err != nil:
 				action = "remove failed"
 			}
 			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", a.ArchiveID, a.Manifest.Timestamp.Local().Format(time.DateTime), action)
 		}
 		return nil
 	})
-	failed := 0
-	for _, a := range res.Removed {
-		if a.Err != nil {
-			failed++
-		}
-	}
+	failed := len(res.Removed) - removedCount(res)
 	summaryVerb := "removed"
 	if dryRun {
 		summaryVerb = "would remove"
@@ -134,4 +139,16 @@ func printPruneResult(w io.Writer, vmName string, res backup.PruneResult, dryRun
 		line += fmt.Sprintf(", failed %d", failed)
 	}
 	_, _ = fmt.Fprintln(w, line)
+}
+
+// removedCount is how many of res.Removed were actually removed (or, under
+// dry run, would be).
+func removedCount(res backup.PruneResult) int {
+	n := 0
+	for _, a := range res.Removed {
+		if a.Err == nil {
+			n++
+		}
+	}
+	return n
 }
