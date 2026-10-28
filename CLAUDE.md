@@ -200,7 +200,7 @@ with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
 | Config        | YAML at `~/.config/snapback/config.yaml` — destination, compression, retention (keep_last/daily/weekly), per-VM name/vmx/schedule |
 
 Command surface (`docs/design.md#command-reference`): `init`, `run
---vm <name>` / `run --all`, `list`, `restore <archive-id>` (never
+--vm <name>`, `list`, `restore <archive-id>` (never
 overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
 `status --xbar`, `prune [--vm] [--dry-run]`, `cleanup`, `vm add`, `vm remove <name>`,
 `schedule sync`.

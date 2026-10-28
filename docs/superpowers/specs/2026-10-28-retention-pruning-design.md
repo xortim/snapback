@@ -158,7 +158,8 @@ func pruneLocked(destination, vmName string, p retention.Policy, now time.Time, 
 ### `backup.Run` changes
 
 - `Options` gains `Retention retention.Policy`.
-- After checksumming and staging cleanup succeed, `Run` emits a
+- After the manifest is written (staging cleanup is deferred and runs on
+  return), `Run` emits a
   `progress.Pruning` stage event and calls `pruneLocked(opts.Destination,
   opts.VMName, opts.Retention, now, false)`, with `now` from `opts.Now`.
 - `Result` gains `Pruned []PrunedArchive` (the removed set) and
