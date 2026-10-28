@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Phase 1 (core CLI) is in progress. Real Go source exists under
 `cmd/snapback`, `internal/backup`, `internal/cli`, `internal/config`,
-`internal/progress`, and `internal/vm`.
+`internal/notify`, `internal/progress`, and `internal/vm`.
 
 Landed so far (closed issues #2–#8, #11, #14–#16, #19, #21; merged PRs
 #12, #13, #18, #20, #22–#24, #33): the vmcli-vs-vmrun investigation,
@@ -57,7 +57,7 @@ Scheduled runs land in `~/Library/Logs/snapback/<sanitized-vm-name>.log`,
 rotated in-process by size (5MB, 3 generations) rather than via
 `newsyslog.d`, specifically to avoid this tool's first `sudo`. Two pieces
 the old Phase 2 bundled in did *not* ship: osascript notifications
-(split to #86, `progress.Notifying` still fires nothing) and `run --all`
+(split to #86, since landed: `internal/notify` behind a `Notifier` interface with a `Fake`, sent by `run` only when stdout isn't a terminal, gated by `notifications.enabled`/`on_success`, plus `snapback notify test` for the Script Editor permission prompt) and `run --all`
 (unnecessary — one plist per VM means launchd invokes each `run --vm`
 independently). Drift detection (#85) has since landed too: a new `Installer.IsLoaded`
 plus a shared `classifyAgent` helper
