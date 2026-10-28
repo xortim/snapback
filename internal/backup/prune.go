@@ -3,6 +3,7 @@ package backup
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
@@ -12,14 +13,21 @@ import (
 
 // PrunedArchive is one archive Prune considered, with the reasons
 // retention.Select gave for keeping it (empty for a removed archive).
+//
+// Err is the removeArchive failure for this archive, nil on success and
+// always nil for Kept entries and under dryRun. An entry in Removed whose
+// Err is non-nil is still on disk (or is an unlisted leftover directory).
 type PrunedArchive struct {
 	Archive
 	Reasons []string
+	Err     error
 }
 
-// PruneResult reports what Prune kept and removed (or, under dryRun,
-// would remove). Errs holds per-archive removal failures; one failure
-// doesn't stop the rest.
+// PruneResult reports what Prune kept and removed. Removed is the set
+// selected for removal (under dryRun: would be removed); an entry whose
+// Err is non-nil is still on disk (or is an unlisted leftover dir) -- see
+// Err. Errs holds the same per-archive removal failures, collected; one
+// failure doesn't stop the rest.
 type PruneResult struct {
 	Kept    []PrunedArchive
 	Removed []PrunedArchive
@@ -31,6 +39,15 @@ type PruneResult struct {
 // wrapping ErrLocked. See
 // docs/superpowers/specs/2026-10-28-retention-pruning-design.md.
 func Prune(destination, vmName string, p retention.Policy, now time.Time, dryRun bool) (PruneResult, error) {
+	// AcquireLock MkdirAlls <destination>/.snapback-locks; against an
+	// unmounted external drive that would create the path on the boot
+	// volume and make macOS later mount the real drive as "<name> 1".
+	if _, err := os.Stat(destination); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return PruneResult{}, nil
+		}
+		return PruneResult{}, fmt.Errorf("stat destination: %w", err)
+	}
 	lock, err := AcquireLock(destination, vmName)
 	if err != nil {
 		return PruneResult{}, err
@@ -68,13 +85,13 @@ func pruneLocked(destination, vmName string, p retention.Policy, now time.Time, 
 			res.Kept = append(res.Kept, pa)
 			continue
 		}
+		if !dryRun {
+			if err := removeArchive(filepath.Join(destination, d.ID)); err != nil {
+				pa.Err = err
+				res.Errs = append(res.Errs, err)
+			}
+		}
 		res.Removed = append(res.Removed, pa)
-		if dryRun {
-			continue
-		}
-		if err := removeArchive(filepath.Join(destination, d.ID)); err != nil {
-			res.Errs = append(res.Errs, err)
-		}
 	}
 	return res, nil
 }

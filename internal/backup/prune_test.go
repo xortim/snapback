@@ -157,6 +157,11 @@ func TestPrune_ManifestRemoveFails_ArchiveIntactOthersStillRemoved(t *testing.T)
 	if len(res.Errs) != 1 || !strings.Contains(res.Errs[0].Error(), "myvm-1") {
 		t.Errorf("Errs = %v, want one error naming myvm-1", res.Errs)
 	}
+	for _, r := range res.Removed {
+		if failed := r.ArchiveID == "myvm-1"; failed != (r.Err != nil) {
+			t.Errorf("Removed %s Err = %v, want non-nil only for myvm-1", r.ArchiveID, r.Err)
+		}
+	}
 	if got := listedIDs(t, dest); !slices.Equal(got, []string{"myvm-3", "myvm-1"}) {
 		t.Errorf("listed after prune = %v, want [myvm-3 myvm-1] (myvm-2 removed, myvm-1 intact)", got)
 	}
@@ -211,6 +216,14 @@ func TestPrune_SymlinkedArchiveNotDeleted(t *testing.T) {
 	if len(res.Errs) != 1 || !strings.Contains(res.Errs[0].Error(), "symlink") {
 		t.Errorf("Errs = %v, want one symlink error", res.Errs)
 	}
+	if len(res.Removed) != 1 || res.Removed[0].Err == nil {
+		t.Errorf("Removed = %+v, want the symlinked entry to carry Err", res.Removed)
+	}
+	for _, k := range res.Kept {
+		if k.Err != nil {
+			t.Errorf("Kept %s has Err = %v, want nil", k.ArchiveID, k.Err)
+		}
+	}
 	if _, err := os.Lstat(link); err != nil {
 		t.Errorf("symlink removed: %v", err)
 	}
@@ -246,5 +259,21 @@ func TestPrune_MissingDestination_NoArchivesNoError(t *testing.T) {
 	}
 	if len(res.Kept)+len(res.Removed)+len(res.Errs) != 0 {
 		t.Errorf("result = %+v, want empty", res)
+	}
+}
+
+func TestPrune_MissingDestination_DoesNotCreateIt(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		dest := filepath.Join(t.TempDir(), "unmounted-drive")
+		res, err := Prune(dest, "myvm", retention.Policy{KeepLast: 1}, pruneNow, dryRun)
+		if err != nil {
+			t.Fatalf("dryRun=%v: Prune() error = %v, want nil", dryRun, err)
+		}
+		if len(res.Kept)+len(res.Removed)+len(res.Errs) != 0 {
+			t.Errorf("dryRun=%v: result = %+v, want empty", dryRun, res)
+		}
+		if _, err := os.Stat(dest); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("dryRun=%v: destination created (stat err = %v)", dryRun, err)
+		}
 	}
 }
