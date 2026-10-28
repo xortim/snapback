@@ -1435,6 +1435,9 @@ func TestRun_Prune_KeepsJustWrittenArchive(t *testing.T) {
 	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("older same-week archive still present (err = %v)", err)
 	}
+	if len(res.Pruned) != 1 || res.Pruned[0].ArchiveID != filepath.Base(old) {
+		t.Errorf("Pruned = %+v, want exactly the old archive %s", res.Pruned, filepath.Base(old))
+	}
 }
 
 func TestRun_Prune_FailureIsNonFatal(t *testing.T) {
@@ -1460,6 +1463,9 @@ func TestRun_Prune_FailureIsNonFatal(t *testing.T) {
 	}
 	if _, err := os.Stat(res.ManifestPath); err != nil {
 		t.Errorf("new archive missing: %v", err)
+	}
+	if len(res.Pruned) != 0 {
+		t.Errorf("Pruned = %+v, want empty (the only removal failed)", res.Pruned)
 	}
 }
 

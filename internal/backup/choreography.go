@@ -39,7 +39,8 @@ type Result struct {
 	ArchivePath  string
 	ManifestPath string
 	Manifest     Manifest
-	// Pruned lists the archives the post-backup prune removed. PruneErr
+	// Pruned lists the archives the post-backup prune actually removed
+	// (entries whose removal failed are excluded). PruneErr
 	// is non-nil if that prune failed in any way; it never makes Run
 	// return an error -- the archive just written is good regardless.
 	Pruned   []PrunedArchive
@@ -450,8 +451,11 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 
 	succeeded = true
 
-	// Stage: Pruning -- last, under the lock Run already holds, and only
-	// reached once everything above succeeded. now() rather than
+	// Stage: Pruning -- under the lock Run already holds, and only
+	// reached once everything above succeeded. It runs after the manifest
+	// is written and before the deferred staging cleanup (which runs on
+	// return); the spec's "after staging cleanup" wording is superseded
+	// by this order. now() rather than
 	// startTime: day/week buckets are computed in now's location (local
 	// time in production), and startTime was forced to UTC.
 	reporter.Report(progress.Event{Stage: progress.Pruning, Message: "pruning old archives"})
@@ -467,9 +471,21 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		ArchivePath:  archivePath,
 		ManifestPath: manifestPath,
 		Manifest:     manifest,
-		Pruned:       pruneRes.Removed,
+		Pruned:       removedOK(pruneRes.Removed),
 		PruneErr:     pruneErr,
 	}, nil
+}
+
+// removedOK filters a prune's Removed set down to the archives whose
+// removal actually succeeded.
+func removedOK(removed []PrunedArchive) []PrunedArchive {
+	var ok []PrunedArchive
+	for _, r := range removed {
+		if r.Err == nil {
+			ok = append(ok, r)
+		}
+	}
+	return ok
 }
 
 // percentOf returns cumulative/total as a fraction in [0,1], or 0 if
