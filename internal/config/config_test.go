@@ -198,3 +198,14 @@ func writeTempConfig(t *testing.T, contents string) string {
 	}
 	return path
 }
+
+func TestLoad_OnSuccessParses(t *testing.T) {
+	path := writeTempConfig(t, "destination: /d\nnotifications:\n  enabled: true\n  on_success: true\n")
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Notifications.OnSuccess {
+		t.Error("OnSuccess = false, want true")
+	}
+}

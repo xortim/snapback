@@ -3,6 +3,7 @@ package config_test
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/xortim/snapback/internal/config"
@@ -38,6 +39,7 @@ vms:
       vmx: /vms/win-testbed.vmwarevm/win-testbed.vmx
 notifications:
     enabled: true
+    on_success: false
 `
 	if string(got) != want {
 		t.Errorf("Marshal produced:\n%s\nwant:\n%s", got, want)
@@ -73,5 +75,15 @@ func TestMarshal_RoundTripsThroughLoad(t *testing.T) {
 	}
 	if len(loaded.VMs) != 1 || loaded.VMs[0] != cfg.VMs[0] {
 		t.Errorf("Load(Marshal(cfg)).VMs = %+v, want %+v", loaded.VMs, cfg.VMs)
+	}
+}
+
+func TestMarshal_AlwaysWritesOnSuccess(t *testing.T) {
+	out, err := config.Marshal(&config.Config{Destination: "/d", Compression: "zstd", Notifications: config.Notifications{Enabled: true, OnSuccess: false}})
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	if !strings.Contains(string(out), "on_success: false") {
+		t.Errorf("Marshal() = %s, want an explicit on_success: false", out)
 	}
 }

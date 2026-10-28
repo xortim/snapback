@@ -35,6 +35,11 @@ type VM struct {
 
 type Notifications struct {
 	Enabled bool `koanf:"enabled" yaml:"enabled"`
+	// OnSuccess controls whether a successful unattended run notifies;
+	// failures always notify when Enabled. init writes it as true; there
+	// is deliberately no load-time default -- see
+	// docs/superpowers/specs/2026-10-26-run-notifications-design.md.
+	OnSuccess bool `koanf:"on_success" yaml:"on_success"`
 }
 
 func Load(path string) (*Config, error) {
