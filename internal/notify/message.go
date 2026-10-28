@@ -33,7 +33,7 @@ func Success(vmName, archiveID string) Notification {
 func Failure(vmName string, err error, snapshotMayRemain bool) Notification {
 	msg := ""
 	if err != nil {
-		msg, _, _ = strings.Cut(err.Error(), "\n")
+		msg, _, _ = strings.Cut(strings.TrimSpace(err.Error()), "\n")
 		msg = strings.TrimSpace(msg)
 	}
 	if msg == "" {

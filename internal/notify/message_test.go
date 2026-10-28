@@ -68,3 +68,10 @@ func TestFailure_EmptyOrNilError(t *testing.T) {
 		t.Errorf("nil error Message = %q, want %q", got.Message, "unknown error")
 	}
 }
+
+func TestFailure_LeadingNewline_UsesFirstNonEmptyLine(t *testing.T) {
+	got := notify.Failure("myvm", errors.New("\ncopy failed\nmore"), false).Message
+	if got != "copy failed" {
+		t.Errorf("Message = %q, want %q", got, "copy failed")
+	}
+}

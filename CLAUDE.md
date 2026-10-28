@@ -60,19 +60,18 @@ the old Phase 2 bundled in did *not* ship: osascript notifications
 (split to #86, since landed: `internal/notify` behind a `Notifier`
 interface with a `Fake`, sent by `run` only when stdout isn't a
 terminal, gated by `notifications.enabled`/`on_success`, plus
-`snapback notify test` for the Script Editor permission prompt) and
-`run --all`
-(unnecessary — one plist per VM means launchd invokes each `run --vm`
-independently). Drift detection (#85) has since landed too: a new `Installer.IsLoaded`
-plus a shared `classifyAgent` helper
+`snapback notify test` for the Script Editor permission prompt) and `run
+--all` (unnecessary — one plist per VM means launchd invokes each `run
+--vm` independently). Drift detection (#85) has since landed too: a new
+`Installer.IsLoaded` plus a shared `classifyAgent` helper
 (`internal/launchd/classify.go`) let `Sync` and a new read-only
 `launchd.CheckDrift` agree on exactly one definition of "in sync" --
 `Sync` now self-heals a plist whose content already matches config but
-isn't bootstrapped (reported under `SyncResult.Reloaded`), and
-`snapback status` calls `CheckDrift` to warn, non-fatally, about any
-VM whose configured schedule doesn't match what's actually
-installed/loaded, the same way it already warns about damaged disk
-chains and undiscovered VMs.
+isn't bootstrapped (reported under `SyncResult.Reloaded`), and `snapback
+status` calls `CheckDrift` to warn, non-fatally, about any VM whose
+configured schedule doesn't match what's actually installed/loaded, the
+same way it already warns about damaged disk chains and undiscovered
+VMs.
 
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open

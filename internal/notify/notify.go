@@ -65,7 +65,9 @@ func NewOSAScript() *OSAScript {
 }
 
 func runCombined(ctx context.Context, name string, args ...string) ([]byte, error) {
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.WaitDelay = time.Second // bounds the 5s NotifyTimeout even if pipes stay open
+	return cmd.CombinedOutput()
 }
 
 // Notify implements Notifier.
