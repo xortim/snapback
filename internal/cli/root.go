@@ -28,6 +28,7 @@ func NewRootCmd() *cobra.Command {
 		newListCmd(),
 		newStatusCmd(),
 		newCleanupCmd(),
+		newPruneCmd(),
 		newVMCmd(),
 		newRestoreCmd(),
 		newScheduleCmd(),

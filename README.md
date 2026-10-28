@@ -1,8 +1,8 @@
 # snapback
 
 Zero-downtime backup manager for VMware Fusion VMs on macOS. Snapshot,
-copy, checksum, restore, and scheduled unattended backups via `launchd`
-today — retention pruning and an xbar menu-bar plugin are next (see
+copy, checksum, restore, scheduled unattended backups via `launchd`, and
+retention pruning today — an xbar menu-bar plugin is next (see
 Status/Roadmap below).
 
 Built because [Vimalin](https://www.vimalin.com/) is GUI-only shareware
@@ -48,7 +48,9 @@ when `notifications.on_success: true` (as `init` writes it), and
 `snapback notify test` triggers the Script Editor permission prompt
 while you're at the machine. The other item the original Phase 2
 bundled in, `run --all`, turned out to be unnecessary — one plist per VM means launchd fires
-each VM's `run --vm` independently. See
+each VM's `run --vm` independently. Retention pruning has landed too:
+`run` prunes each VM's archives after every successful backup, and
+`snapback prune` applies the policy on demand. See
 [`docs/design.md`](docs/design.md) for the full ADR
 — architecture, choreography, config schema, risks, and the open
 questions still worth verifying locally, plus its own Roadmap section
@@ -89,6 +91,7 @@ snapback list                       # backup archives, with timestamp and size
 snapback status                     # one row per configured VM: last backup, size, archive count
 snapback restore --vm dev-ubuntu --latest   # restore the newest archive as a new .vmwarevm, never overwriting the source
 snapback schedule sync              # reconcile each VM's LaunchAgent with its config `schedule` (init/vm add/vm remove do this for you)
+snapback prune --dry-run              # preview what the retention policy would remove
 ```
 
 Full command reference — every subcommand and flag — is in
@@ -148,7 +151,7 @@ SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, need
 - [x] Phase 2 — `launchd` scheduling: one LaunchAgent per scheduled VM, `snapback schedule sync`, auto-sync from `vm add`/`vm remove`/`init`, rotated per-VM logs. Success/failure notifications (split out as [#86](https://github.com/xortim/snapback/issues/86)) have since shipped; `run --all` dropped as unnecessary under the one-plist-per-VM model
 - [x] Phase 3 — Restore workflow, manifest-driven integrity check (pulled ahead of Phase 2 — see Status above)
 - [ ] Phase 4 — xbar plugin
-- [ ] Phase 5 — Retention/pruning policy engine (`prune` command; config already parses `keep_last`/`keep_daily`/`keep_weekly`)
+- [x] Phase 5 — Retention: `run` prunes each VM's archives after every successful backup, and `snapback prune [--vm] [--dry-run]` applies the policy on demand
 - [ ] Phase 6 (stretch) — SMB/NFS destinations
 
 ## Scope

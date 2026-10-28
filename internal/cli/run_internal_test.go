@@ -6,12 +6,14 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -644,5 +646,115 @@ func TestSnapshotMayRemain(t *testing.T) {
 	}
 	if !snapshotMayRemain(&backup.RunError{Stage: progress.Merging, Err: errBoom}) {
 		t.Error("Merging: got false, want true")
+	}
+}
+
+func writeOldCLIArchive(t *testing.T, dest, id, vmName string, ts time.Time) string {
+	t.Helper()
+	dir := filepath.Join(dest, id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(backup.Manifest{VMName: vmName, Timestamp: ts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestRunCmd_AppliesRetentionAndReportsPrunedCount(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	dest := t.TempDir()
+	old := writeOldCLIArchive(t, dest, "myvm-20200101T000000Z", "myvm", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: dest,
+				Compression: "gzip",
+				Retention:   config.Retention{KeepLast: 1},
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("old archive still present (err = %v)", err)
+	}
+	if !strings.Contains(out.String(), "pruned 1 old backup(s)") {
+		t.Errorf("stdout = %q, want a pruned-count line", out.String())
+	}
+	if errOut.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", errOut.String())
+	}
+}
+
+func TestRunCmd_PruneFailure_WarnsButSucceeds(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based failure injection doesn't work as root")
+	}
+	vmxPath := writeVMBundle(t)
+	dest := t.TempDir()
+	old := writeOldCLIArchive(t, dest, "myvm-20200101T000000Z", "myvm", time.Date(2020, 1, 1, 0, 0, 0, 0, time.UTC))
+	if err := os.Chmod(old, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(old, 0o700) })
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	root := newTestRoot(t, runDeps{
+		loadConfig: func(string) (*config.Config, error) {
+			return &config.Config{
+				Destination: dest,
+				Compression: "gzip",
+				Retention:   config.Retention{KeepLast: 1},
+				VMs:         []config.VM{{Name: "myvm", VMX: vmxPath}},
+			}, nil
+		},
+		newController: func() (vm.Controller, error) { return fake, nil },
+	})
+	var out, errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&out)
+	root.SetErr(&errOut)
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil (prune failure is non-fatal)", err)
+	}
+	if !strings.Contains(errOut.String(), "warning: pruning old backups failed:") {
+		t.Errorf("stderr = %q, want the prune-failure warning", errOut.String())
+	}
+	if strings.Contains(out.String(), "pruned ") {
+		t.Errorf("stdout = %q, must not claim anything was pruned", out.String())
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == filepath.Base(old) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dest, e.Name(), "manifest.json")); err == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no new archive with a manifest in %s", dest)
 	}
 }

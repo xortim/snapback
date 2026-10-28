@@ -22,9 +22,9 @@ import (
 var ErrInteractiveRunIncomplete = errors.New("interactive run ended before the backup finished")
 
 // runStages is the fixed, display-order subset of progress.Stage values
-// backup.Run actually reports today (Pruning/Notifying exist as Stage
-// constants for future phases but aren't emitted yet, so they're left off
-// this checklist rather than shown permanently pending).
+// backup.Run reports. Notifying exists as a Stage constant but is left off
+// this checklist: internal/cli sends the notification after the choreography
+// rather than emitting it as a stage.
 var runStages = []progress.Stage{
 	progress.CheckingTools,
 	progress.Snapshotting,
@@ -32,6 +32,7 @@ var runStages = []progress.Stage{
 	progress.Merging,
 	progress.Compressing,
 	progress.Checksumming,
+	progress.Pruning,
 }
 
 var runBarStages = []progress.Stage{progress.Copying, progress.Compressing}

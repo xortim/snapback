@@ -73,6 +73,20 @@ configured schedule doesn't match what's actually installed/loaded, the
 same way it already warns about damaged disk chains and undiscovered
 VMs.
 
+Phase 5 (retention) has landed too
+(`docs/superpowers/specs/2026-10-28-retention-pruning-design.md`). The
+pure `internal/retention.Select` applies time-window semantics
+(`keep_daily: N` keeps the newest archive from each of the last N local
+calendar days, `keep_weekly` the same over ISO weeks; rules union, the
+newest real archive is always kept, all-zero keeps everything).
+`backup.Prune`/`pruneLocked` delete manifest-first, then the directory,
+refuse symlinked archive dirs, and only touch archives whose manifest
+`vm_name` is a configured VM. `Run` calls `pruneLocked` as its last step
+under its lock; a prune failure is non-fatal (`warning: pruning old
+backups failed: ...` on stderr). `snapback prune [--vm] [--dry-run]`
+applies the policy on demand, skipping any VM whose lock is held and
+exiting non-zero on any removal error.
+
 Treat `docs/design.md` as the source of truth for architecture decisions
 — it's a full ADR (context, alternatives ruled out, risks, open
 questions), not just a summary.
@@ -186,9 +200,9 @@ with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
 | Config        | YAML at `~/.config/snapback/config.yaml` — destination, compression, retention (keep_last/daily/weekly), per-VM name/vmx/schedule |
 
 Command surface (`docs/design.md#command-reference`): `init`, `run
---vm <name>` / `run --all`, `list`, `restore <archive-id>` (never
+--vm <name>`, `list`, `restore <archive-id>` (never
 overwrites source, suffixes `- backup yyyy-mm-dd`), `status` /
-`status --xbar`, `prune`, `cleanup`, `vm add`, `vm remove <name>`,
+`status --xbar`, `prune [--vm] [--dry-run]`, `cleanup`, `vm add`, `vm remove <name>`,
 `schedule sync`.
 
 ## Known gotchas worth carrying into implementation

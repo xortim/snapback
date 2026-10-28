@@ -20,6 +20,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/retention"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -913,6 +914,7 @@ func TestRun_HappyPath_ReportsStagesInOrder(t *testing.T) {
 		progress.Merging,
 		progress.Compressing,
 		progress.Checksumming,
+		progress.Pruning,
 		progress.Done,
 	}
 	var gotOrder []progress.Stage
@@ -1355,4 +1357,130 @@ func writeMinimalVMXWithDisks(t *testing.T, diskLines string) string {
 		t.Fatalf("write vmx: %v", err)
 	}
 	return path
+}
+
+// writeOldArchive plants a prior archive for vmName under destination,
+// the way an earlier Run would have left it (directory + manifest.json).
+func writeOldArchive(t *testing.T, destination, archiveID, vmName string, ts time.Time) string {
+	t.Helper()
+	dir := filepath.Join(destination, archiveID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(backup.Manifest{VMName: vmName, Timestamp: ts})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func runOptsForPrune(t *testing.T, dest string, p retention.Policy, now time.Time) backup.Options {
+	t.Helper()
+	return backup.Options{
+		VMName:      "myvm",
+		VMXPath:     writeMinimalVMX(t),
+		Destination: dest,
+		StagingDir:  t.TempDir(),
+		Compression: "gzip",
+		Retention:   p,
+		Now:         func() time.Time { return now },
+	}
+}
+
+func TestRun_Prune_RemovesOldArchivesOnSuccess(t *testing.T) {
+	dest := t.TempDir()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	old1 := writeOldArchive(t, dest, "myvm-20261001T000000Z", "myvm", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	old2 := writeOldArchive(t, dest, "myvm-20261002T000000Z", "myvm", time.Date(2026, 10, 2, 0, 0, 0, 0, time.UTC))
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	res, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, runOptsForPrune(t, dest, retention.Policy{KeepLast: 2}, now))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if res.PruneErr != nil {
+		t.Fatalf("PruneErr = %v, want nil", res.PruneErr)
+	}
+	if len(res.Pruned) != 1 || res.Pruned[0].ArchiveID != "myvm-20261001T000000Z" {
+		t.Errorf("Pruned = %+v, want just myvm-20261001T000000Z", res.Pruned)
+	}
+	if _, err := os.Stat(old1); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("oldest archive still present (err = %v)", err)
+	}
+	if _, err := os.Stat(old2); err != nil {
+		t.Errorf("second-newest archive removed: %v", err)
+	}
+}
+
+func TestRun_Prune_KeepsJustWrittenArchive(t *testing.T) {
+	dest := t.TempDir()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	// Same ISO week as now, but older: keep_weekly 1 alone would keep
+	// only one archive for this week, and it must be the new one.
+	old := writeOldArchive(t, dest, "myvm-20261026T000000Z", "myvm", time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC))
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	res, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, runOptsForPrune(t, dest, retention.Policy{KeepWeekly: 1}, now))
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if _, err := os.Stat(res.ManifestPath); err != nil {
+		t.Fatalf("just-written archive's manifest gone: %v", err)
+	}
+	if _, err := os.Stat(old); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("older same-week archive still present (err = %v)", err)
+	}
+	if len(res.Pruned) != 1 || res.Pruned[0].ArchiveID != filepath.Base(old) {
+		t.Errorf("Pruned = %+v, want exactly the old archive %s", res.Pruned, filepath.Base(old))
+	}
+}
+
+func TestRun_Prune_FailureIsNonFatal(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("permission-based failure injection doesn't work as root")
+	}
+	dest := t.TempDir()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	old := writeOldArchive(t, dest, "myvm-20261001T000000Z", "myvm", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	if err := os.Chmod(old, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(old, 0o700) })
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+
+	res, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, runOptsForPrune(t, dest, retention.Policy{KeepLast: 1}, now))
+	if err != nil {
+		t.Fatalf("Run() error = %v, want nil (prune failure must not fail the backup)", err)
+	}
+	if res.PruneErr == nil || !strings.Contains(res.PruneErr.Error(), "myvm-20261001T000000Z") {
+		t.Errorf("PruneErr = %v, want an error naming the stuck archive", res.PruneErr)
+	}
+	if _, err := os.Stat(res.ManifestPath); err != nil {
+		t.Errorf("new archive missing: %v", err)
+	}
+	if len(res.Pruned) != 0 {
+		t.Errorf("Pruned = %+v, want empty (the only removal failed)", res.Pruned)
+	}
+}
+
+func TestRun_Prune_NotRunOnFailure(t *testing.T) {
+	dest := t.TempDir()
+	now := time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)
+	old := writeOldArchive(t, dest, "myvm-20261001T000000Z", "myvm", time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC))
+	fake := vm.NewFakeVMController()
+	fake.ToolsState = vm.ToolsRunning
+	fake.DeleteSnapshotErr = errBoom
+
+	if _, err := backup.Run(t.Context(), fake, progress.NoOpReporter{}, runOptsForPrune(t, dest, retention.Policy{KeepLast: 1}, now)); err == nil {
+		t.Fatal("Run() error = nil, want the injected merge failure")
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("old archive removed by a failed run: %v", err)
+	}
 }
