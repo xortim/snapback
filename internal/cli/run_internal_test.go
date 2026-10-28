@@ -17,6 +17,7 @@ import (
 
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
+	"github.com/xortim/snapback/internal/notify"
 	"github.com/xortim/snapback/internal/progress"
 	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
@@ -437,5 +438,211 @@ func TestRunCmd_MergeFailure_WarnsAboutPossibleOrphanOnStderr(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "may remain") {
 		t.Errorf("stderr = %q, want an orphaned-snapshot warning", errOut.String())
+	}
+}
+
+func notifyTestDeps(t *testing.T, cfg *config.Config, fake *vm.FakeVMController, tty bool, n *notify.Fake) runDeps {
+	t.Helper()
+	return runDeps{
+		loadConfig:    func(string) (*config.Config, error) { return cfg, nil },
+		newController: func() (vm.Controller, error) { return fake, nil },
+		isTerminal:    func(io.Writer) bool { return tty },
+		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
+			return backupFn(progress.NoOpReporter{})
+		},
+		newNotifier: func() notify.Notifier { return n },
+	}
+}
+
+func TestRunCmd_Notifications_Gating(t *testing.T) {
+	tests := []struct {
+		name      string
+		enabled   bool
+		onSuccess bool
+		tty       bool
+		fail      bool
+		wantSent  bool
+	}{
+		{"disabled, success", false, true, false, false, false},
+		{"disabled, failure", false, true, false, true, false},
+		{"tty, success", true, true, true, false, false},
+		{"tty, failure", true, true, true, true, false},
+		{"non-tty, success, on_success", true, true, false, false, true},
+		{"non-tty, success, !on_success", true, false, false, false, false},
+		{"non-tty, failure, on_success", true, true, false, true, true},
+		{"non-tty, failure, !on_success", true, false, false, true, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vmxPath := writeVMBundle(t)
+			ctrl := vm.NewFakeVMController()
+			ctrl.ToolsState = vm.ToolsRunning
+			if tt.fail {
+				ctrl.DeleteSnapshotErr = errBoom
+			}
+			cfg := &config.Config{
+				Destination:   t.TempDir(),
+				Compression:   "gzip",
+				VMs:           []config.VM{{Name: "myvm", VMX: vmxPath}},
+				Notifications: config.Notifications{Enabled: tt.enabled, OnSuccess: tt.onSuccess},
+			}
+			n := &notify.Fake{}
+			root := newTestRoot(t, notifyTestDeps(t, cfg, ctrl, tt.tty, n))
+			root.SetArgs([]string{"run", "--vm", "myvm"})
+			root.SetOut(&bytes.Buffer{})
+			root.SetErr(&bytes.Buffer{})
+
+			err := root.Execute()
+			if (err != nil) != tt.fail {
+				t.Fatalf("Execute() error = %v, want failure=%v", err, tt.fail)
+			}
+			if got := len(n.Sent) == 1; got != tt.wantSent {
+				t.Fatalf("sent %d notifications, want sent=%v", len(n.Sent), tt.wantSent)
+			}
+		})
+	}
+}
+
+func TestRunCmd_Notifications_SuccessContent(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	ctrl := vm.NewFakeVMController()
+	ctrl.ToolsState = vm.ToolsRunning
+	cfg := &config.Config{
+		Destination: t.TempDir(), Compression: "gzip",
+		VMs:           []config.VM{{Name: "myvm", VMX: vmxPath}},
+		Notifications: config.Notifications{Enabled: true, OnSuccess: true},
+	}
+	n := &notify.Fake{}
+	root := newTestRoot(t, notifyTestDeps(t, cfg, ctrl, false, n))
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	got := n.Sent[0]
+	if got.Subtitle != "myvm backed up" || got.Message == "" || got.Message == "backup complete" || got.Sound != "" {
+		t.Errorf("notification = %+v, want success subtitle and the archive ID as message, no sound", got)
+	}
+}
+
+func TestRunCmd_Notifications_OrphanFailureIncludesCleanupHint(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	ctrl := vm.NewFakeVMController()
+	ctrl.ToolsState = vm.ToolsRunning
+	ctrl.DeleteSnapshotErr = errBoom // Stage: Merging, >= Snapshotting
+	cfg := &config.Config{
+		Destination: t.TempDir(), Compression: "gzip",
+		VMs:           []config.VM{{Name: "myvm", VMX: vmxPath}},
+		Notifications: config.Notifications{Enabled: true},
+	}
+	n := &notify.Fake{}
+	root := newTestRoot(t, notifyTestDeps(t, cfg, ctrl, false, n))
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	_ = root.Execute()
+	if len(n.Sent) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(n.Sent))
+	}
+	got := n.Sent[0]
+	if got.Subtitle != "myvm backup failed" || got.Sound != notify.FailureSound {
+		t.Errorf("notification = %+v, want failure subtitle and sound", got)
+	}
+	if !strings.Contains(got.Message, "snapback cleanup --vm myvm") {
+		t.Errorf("Message = %q, want cleanup hint", got.Message)
+	}
+}
+
+func TestRunCmd_Notifications_UnknownVMNotifiesWithoutCleanupHint(t *testing.T) {
+	cfg := &config.Config{
+		VMs:           []config.VM{{Name: "other-vm"}},
+		Notifications: config.Notifications{Enabled: true},
+	}
+	n := &notify.Fake{}
+	deps := notifyTestDeps(t, cfg, vm.NewFakeVMController(), false, n)
+	deps.newController = func() (vm.Controller, error) { t.Fatal("newController should not be called"); return nil, nil }
+	root := newTestRoot(t, deps)
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	if err := root.Execute(); err == nil {
+		t.Fatal("Execute() error = nil, want unknown-VM error")
+	}
+	if len(n.Sent) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(n.Sent))
+	}
+	if strings.Contains(n.Sent[0].Message, "cleanup") {
+		t.Errorf("Message = %q, want no cleanup hint before any snapshot was taken", n.Sent[0].Message)
+	}
+}
+
+func TestRunCmd_Notifications_NotifierErrorWarnsAndKeepsOutcome(t *testing.T) {
+	vmxPath := writeVMBundle(t)
+	ctrl := vm.NewFakeVMController()
+	ctrl.ToolsState = vm.ToolsRunning
+	cfg := &config.Config{
+		Destination: t.TempDir(), Compression: "gzip",
+		VMs:           []config.VM{{Name: "myvm", VMX: vmxPath}},
+		Notifications: config.Notifications{Enabled: true, OnSuccess: true},
+	}
+	n := &notify.Fake{Err: errors.New("osascript exploded")}
+	root := newTestRoot(t, notifyTestDeps(t, cfg, ctrl, false, n))
+	var errOut bytes.Buffer
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&errOut)
+	if err := root.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v, want nil -- a notification failure must not fail the run", err)
+	}
+	if !strings.Contains(errOut.String(), "warning: could not send notification: ") || !strings.Contains(errOut.String(), "osascript exploded") {
+		t.Errorf("stderr = %q, want a notification warning", errOut.String())
+	}
+}
+
+func TestRunCmd_Notifications_CanceledContextStillNotifies(t *testing.T) {
+	cfg := &config.Config{
+		VMs:           []config.VM{{Name: "other-vm"}},
+		Notifications: config.Notifications{Enabled: true},
+	}
+	n := &notify.Fake{}
+	root := newTestRoot(t, notifyTestDeps(t, cfg, vm.NewFakeVMController(), false, n))
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_ = root.ExecuteContext(ctx)
+	if len(n.Contexts) != 1 {
+		t.Fatalf("sent %d notifications, want 1", len(n.Contexts))
+	}
+	if err := n.Contexts[0].Err(); err != nil {
+		t.Errorf("ctx passed to Notify is already done (%v), want it detached from the command's cancellation", err)
+	}
+}
+
+func TestRunCmd_Notifications_NilNotifierNeverPanics(t *testing.T) {
+	cfg := &config.Config{
+		VMs:           []config.VM{{Name: "other-vm"}},
+		Notifications: config.Notifications{Enabled: true},
+	}
+	deps := notifyTestDeps(t, cfg, vm.NewFakeVMController(), false, nil)
+	deps.newNotifier = nil
+	root := newTestRoot(t, deps)
+	root.SetArgs([]string{"run", "--vm", "myvm"})
+	root.SetOut(&bytes.Buffer{})
+	root.SetErr(&bytes.Buffer{})
+	_ = root.Execute() // must not panic
+}
+
+func TestSnapshotMayRemain(t *testing.T) {
+	if snapshotMayRemain(errBoom) {
+		t.Error("plain error: got true, want false")
+	}
+	if snapshotMayRemain(&backup.RunError{Stage: progress.CheckingTools, Err: errBoom}) {
+		t.Error("CheckingTools: got true, want false")
+	}
+	if !snapshotMayRemain(&backup.RunError{Stage: progress.Merging, Err: errBoom}) {
+		t.Error("Merging: got false, want true")
 	}
 }
