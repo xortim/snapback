@@ -57,7 +57,11 @@ Scheduled runs land in `~/Library/Logs/snapback/<sanitized-vm-name>.log`,
 rotated in-process by size (5MB, 3 generations) rather than via
 `newsyslog.d`, specifically to avoid this tool's first `sudo`. Two pieces
 the old Phase 2 bundled in did *not* ship: osascript notifications
-(split to #86, since landed: `internal/notify` behind a `Notifier` interface with a `Fake`, sent by `run` only when stdout isn't a terminal, gated by `notifications.enabled`/`on_success`, plus `snapback notify test` for the Script Editor permission prompt) and `run --all`
+(split to #86, since landed: `internal/notify` behind a `Notifier`
+interface with a `Fake`, sent by `run` only when stdout isn't a
+terminal, gated by `notifications.enabled`/`on_success`, plus
+`snapback notify test` for the Script Editor permission prompt) and
+`run --all`
 (unnecessary — one plist per VM means launchd invokes each `run --vm`
 independently). Drift detection (#85) has since landed too: a new `Installer.IsLoaded`
 plus a shared `classifyAgent` helper
@@ -166,8 +170,9 @@ back — never clone:
    staged copy to the destination.
 7. SHA-256 the archive, write `manifest.json` (VM name, guest OS, size,
    timestamp, `tools_state`).
-8. Remove the staging copy, prune archives beyond retention policy, fire
-   an `osascript` notification.
+8. Remove the staging copy, prune archives beyond retention policy.
+   (The `osascript` notification is not part of the choreography: the
+   `run` command sends it afterward, only when stdout isn't a terminal.)
 
 If the process dies between snapshot and cleanup, the source VM is left
 with an orphaned `snapback-<timestamp>` snapshot — `snapback cleanup`
