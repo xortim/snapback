@@ -80,7 +80,7 @@ The mechanism that actually works, and the one Vimalin uses under the hood: snap
 9. sha256 the archive, write manifest.json (VM name, guest OS, size, timestamp, tools_state)
 10. rm -rf the staging copy
 11. prune archives beyond retention policy
-12. osascript notification: success/failure
+12. (run command, after the choreography) osascript notification: success/failure — only when stdout isn't a terminal; see the run-notifications spec
 ```
 
 Step 3 is what makes this safe: once the snapshot exists, the disk files being copied in step 6 are frozen — the VM's ongoing writes land in the new delta, not in the files `cp` is reading. Step 7 folds that delta back into the source after the copy completes, so the running VM never sees a pause and never carries a lingering snapshot.
@@ -104,6 +104,7 @@ Step 3 is what makes this safe: once the snapshot exists, the disk files being c
 | `snapback vm add [--search-dir <dir>]` | Discover and add new VMs to an existing config, without re-running the rest of `init`       |
 | `snapback vm remove <name>`     | Remove a VM from config.yaml (does not touch the VM itself or its existing archives)              |
 | `snapback schedule sync`        | Reconcile every configured VM's LaunchAgent with its `schedule` field — install, update, or bootout+delete as needed. Idempotent; `init`/`vm add`/`vm remove` run the same reconciliation automatically, so this is mainly for recovering after a hand-edited config. See [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) |
+| `snapback notify test` | Send a sample notification regardless of config, so macOS prompts for (Script Editor) notification permission while you're at the machine |
 
 ## Config Reference
 
@@ -124,9 +125,12 @@ vms:
     schedule: weekly # Sunday, midnight
 notifications:
   enabled: true
+  on_success: true # failures always notify when enabled
 ```
 
 `schedule` is a closed enum, not cron syntax — `""`/omitted (unscheduled), `daily` (midnight), `weekly` (Sunday midnight), or `monthly` (1st, midnight), mirroring cron's own `@daily`/`@weekly`/`@monthly` meta-schedules. `config.Validate` rejects anything else. `config.Load` is more lenient: it first migrates a legacy 5-field cron-string schedule (as pre-ADR-005 `init` wizards wrote, e.g. `"0 2 * * *"`) to the nearest enum value — day-of-month pinned -> `monthly`, day-of-week pinned -> `weekly`, otherwise -> `daily` — before calling Validate, so an existing config.yaml written before this narrowing still loads instead of breaking every command; only non-cron garbage still gets rejected. It was originally documented here as free-form cron; nothing had ever consumed the field, so [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) narrowed it when launchd scheduling landed, which removes an entire class of cron-to-`StartCalendarInterval` translation bugs at the cost of no configurable time-of-day.
+
+`notifications.enabled` gates notifications for unattended (non-terminal) `run`s; failures always notify, successes only when `on_success` is true (as `init` writes it). Notifications go through `osascript`, so macOS shows them under Script Editor — run `snapback notify test` once to get that permission granted.
 
 ## xbar Plugin Output Format
 
@@ -174,7 +178,7 @@ xbar/SwiftBar gets you 90% of the value — a menu bar icon, a dropdown, click-t
 ## Roadmap
 
 - [x] **Phase 1 — Core CLI:** `vmcli` chosen and confirmed as the backing tool, the `VMController` interface (fake + real `vmcli`-backed implementations), and the full backup choreography engine (snapshot → sync → copy → merge → archive → checksum), wired end-to-end to `init` (interactive `huh` wizard), `run --vm`, `list`, `status` / `status --vm`, and `cleanup` (orphaned-snapshot removal). Bonus scope beyond the original phase 1 text: the optional TUI layer (checklist/progress UI for `run`, wizard for `init`, card drill-down for `status --vm`) and `vm add`/`vm remove` for editing an existing config without re-running the wizard. Epic #1 closed.
-- [x] **Phase 2 — Scheduling:** shipped, scoped down to launchd scheduling alone by [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) — `internal/launchd` generates one LaunchAgent per scheduled VM (`com.tim.snapback.<sanitized-vm-name>.plist`) from the narrowed `daily`/`weekly`/`monthly` `schedule` enum, drives it with `launchctl bootstrap`/`bootout` against the `gui/<uid>` domain, and reconciles config against installed state via `snapback schedule sync` — also called automatically by `init`, `vm add`, and `vm remove`. Scheduled runs write to `~/Library/Logs/snapback/<vm>.log` with built-in size-based rotation (no `sudo`, no `newsyslog.d`). The original Phase 2 text bundled two other things in: osascript success/failure notifications are split out to [#86](https://github.com/xortim/snapback/issues/86) (`progress.Notifying` is still a stage nothing fires), and `run --all` was dropped as unnecessary — one plist per VM means launchd invokes each `run --vm` independently. Follow-ups still open: [#85](https://github.com/xortim/snapback/issues/85) (drift detection between config and what's actually installed/loaded). Deliberately sequenced behind Phase 3 (Restore, below): backups only matter if they can be restored, and running `run` by hand was a tolerable stopgap in the meantime where an unverified restore path wasn't.
+- [x] **Phase 2 — Scheduling:** shipped, scoped down to launchd scheduling alone by [ADR-005](superpowers/specs/2026-09-11-launchd-scheduling-design.md) — `internal/launchd` generates one LaunchAgent per scheduled VM (`com.tim.snapback.<sanitized-vm-name>.plist`) from the narrowed `daily`/`weekly`/`monthly` `schedule` enum, drives it with `launchctl bootstrap`/`bootout` against the `gui/<uid>` domain, and reconciles config against installed state via `snapback schedule sync` — also called automatically by `init`, `vm add`, and `vm remove`. Scheduled runs write to `~/Library/Logs/snapback/<vm>.log` with built-in size-based rotation (no `sudo`, no `newsyslog.d`). The original Phase 2 text bundled two other things in: osascript success/failure notifications were split out to [#86](https://github.com/xortim/snapback/issues/86) and have since shipped ([spec](superpowers/specs/2026-10-26-run-notifications-design.md)), and `run --all` was dropped as unnecessary — one plist per VM means launchd invokes each `run --vm` independently. Drift detection ([#85](https://github.com/xortim/snapback/issues/85)) has since landed too: `snapback status` warns about schedule drift between config and what's actually installed/loaded. Deliberately sequenced behind Phase 3 (Restore, below): backups only matter if they can be restored, and running `run` by hand was a tolerable stopgap in the meantime where an unverified restore path wasn't.
 - [x] **Phase 3 — Restore:** `snapback restore`, non-destructive naming, manifest-driven integrity check before restore. Pulled ahead of Phase 2 for the reason above -- shipped.
 - [ ] **Phase 4 — xbar plugin:** `status --xbar` output, plugin script, click-to-run wiring. Not started — `status.go`'s own help text says so today.
 - [ ] **Phase 5 — Retention:** the `retention` config (`keep_last`/`keep_daily`/`keep_weekly`) is parsed, validated, and displayed in `status --vm`, but nothing enforces it yet — no `prune` command exists.

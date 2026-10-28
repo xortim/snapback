@@ -40,11 +40,14 @@ Phase 2's scheduling half has now landed too: each VM's `schedule`
 torn down automatically by `vm add` / `vm remove` / `init`, with
 `snapback schedule sync` to reconcile by hand after a config edit.
 Scheduled runs log to `~/Library/Logs/snapback/<vm-name>.log` with
-built-in size-based rotation. The other two items the original Phase 2
-bundled in are split out rather than shipped: success/failure
-notifications are tracked separately as
-[#86](https://github.com/xortim/snapback/issues/86), and `run --all`
-turned out to be unnecessary — one plist per VM means launchd fires
+built-in size-based rotation. Success/failure notifications (split out
+as [#86](https://github.com/xortim/snapback/issues/86)) have since
+shipped: `run` sends an `osascript` notification only when stdout isn't
+a terminal, failures always (when `notifications.enabled`), successes
+when `notifications.on_success: true` (as `init` writes it), and
+`snapback notify test` triggers the Script Editor permission prompt
+while you're at the machine. The other item the original Phase 2
+bundled in, `run --all`, turned out to be unnecessary — one plist per VM means launchd fires
 each VM's `run --vm` independently. See
 [`docs/design.md`](docs/design.md) for the full ADR
 — architecture, choreography, config schema, risks, and the open
@@ -107,6 +110,7 @@ vms:
     schedule: daily # "" (unscheduled) | daily | weekly | monthly
 notifications:
   enabled: true
+  on_success: true # failures always notify when enabled
 ```
 
 ## Architecture, at a glance
@@ -140,7 +144,7 @@ SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, need
 ## Roadmap
 
 - [x] Phase 1 — Core CLI (`init`, `run --vm`, `list`, `status`, `cleanup`, `vm add`/`vm remove`) plus the optional TUI layer, single VM at a time
-- [x] Phase 2 — `launchd` scheduling: one LaunchAgent per scheduled VM, `snapback schedule sync`, auto-sync from `vm add`/`vm remove`/`init`, rotated per-VM logs. Success/failure notifications split out to [#86](https://github.com/xortim/snapback/issues/86); `run --all` dropped as unnecessary under the one-plist-per-VM model
+- [x] Phase 2 — `launchd` scheduling: one LaunchAgent per scheduled VM, `snapback schedule sync`, auto-sync from `vm add`/`vm remove`/`init`, rotated per-VM logs. Success/failure notifications (split out as [#86](https://github.com/xortim/snapback/issues/86)) have since shipped; `run --all` dropped as unnecessary under the one-plist-per-VM model
 - [x] Phase 3 — Restore workflow, manifest-driven integrity check (pulled ahead of Phase 2 — see Status above)
 - [ ] Phase 4 — xbar plugin
 - [ ] Phase 5 — Retention/pruning policy engine (`prune` command; config already parses `keep_last`/`keep_daily`/`keep_weekly`)

@@ -31,6 +31,7 @@ func NewRootCmd() *cobra.Command {
 		newVMCmd(),
 		newRestoreCmd(),
 		newScheduleCmd(),
+		newNotifyCmd(),
 	)
 
 	return root

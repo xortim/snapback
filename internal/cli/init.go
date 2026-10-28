@@ -178,8 +178,15 @@ func runInit(cmd *cobra.Command, deps initDeps, force bool, extraSearchDirs []st
 		return err
 	}
 
-	_, err = fmt.Fprintf(out, "wrote config to %s\n", configPath)
-	return err
+	if _, err := fmt.Fprintf(out, "wrote config to %s\n", configPath); err != nil {
+		return err
+	}
+	if cfg.Notifications.Enabled {
+		if _, err := fmt.Fprintln(cmd.ErrOrStderr(), notifyTip); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // discoverVMsWithContext runs scan (deps.discoverVMs) in a goroutine and

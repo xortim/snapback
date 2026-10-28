@@ -138,6 +138,7 @@ type coreSettings struct {
 	keepDaily   int
 	keepWeekly  int
 	notify      bool
+	onSuccess   bool
 }
 
 // promptCoreSettings asks destination, compression, the three retention
@@ -161,6 +162,7 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 	keepDaily := defaultKeepDaily
 	keepWeekly := defaultKeepWeekly
 	notify := true
+	onSuccess := true
 	if prior != nil {
 		destination = prior.Destination
 		compression = prior.Compression
@@ -168,6 +170,7 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 		keepDaily = prior.Retention.KeepDaily
 		keepWeekly = prior.Retention.KeepWeekly
 		notify = prior.Notifications.Enabled
+		onSuccess = prior.Notifications.OnSuccess
 	}
 	keepLastStr := strconv.Itoa(keepLast)
 	keepDailyStr := strconv.Itoa(keepDaily)
@@ -218,6 +221,7 @@ func promptCoreSettings(ctx context.Context, in io.Reader, out io.Writer, access
 		keepDaily:   keepDaily,
 		keepWeekly:  keepWeekly,
 		notify:      notify,
+		onSuccess:   onSuccess,
 	}, nil
 }
 
@@ -544,7 +548,7 @@ func RunInitWizard(ctx context.Context, in io.Reader, out io.Writer, accessible 
 			KeepWeekly: settings.keepWeekly,
 		},
 		VMs:           vms,
-		Notifications: config.Notifications{Enabled: settings.notify},
+		Notifications: config.Notifications{Enabled: settings.notify, OnSuccess: settings.onSuccess},
 	}
 	if err := config.Validate(cfg); err != nil {
 		return nil, fmt.Errorf("built an invalid config: %w", err)

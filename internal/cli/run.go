@@ -13,6 +13,7 @@ import (
 	"github.com/xortim/snapback/internal/backup"
 	"github.com/xortim/snapback/internal/config"
 	"github.com/xortim/snapback/internal/launchd"
+	"github.com/xortim/snapback/internal/notify"
 	"github.com/xortim/snapback/internal/progress"
 	"github.com/xortim/snapback/internal/tui"
 	"github.com/xortim/snapback/internal/vm"
@@ -27,11 +28,14 @@ import (
 // runDeps{...} literal leaves it unset, and every existing test's
 // stdout is a *bytes.Buffer (never a real terminal) anyway, so this
 // keeps all of those tests exercising the plain-output path unchanged.
+// A nil newNotifier means never notify, so existing runDeps{...} test
+// literals stay valid.
 type runDeps struct {
 	loadConfig     func(path string) (*config.Config, error)
 	newController  func() (vm.Controller, error)
 	isTerminal     func(w io.Writer) bool
 	runInteractive func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error)
+	newNotifier    func() notify.Notifier
 }
 
 // defaultIsTerminal reports whether w is a real terminal. Only *os.File
@@ -71,6 +75,7 @@ func defaultRunDeps() runDeps {
 		runInteractive: func(out io.Writer, vmName string, cancel context.CancelFunc, backupFn func(progress.Reporter) (*backup.Result, error)) (*backup.Result, error) {
 			return tui.RunInteractive(out, vmName, cancel, backupFn)
 		},
+		newNotifier: func() notify.Notifier { return notify.NewOSAScript() },
 	}
 }
 
@@ -101,12 +106,24 @@ func newRunCmdWithDeps(deps runDeps) *cobra.Command {
 func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 	cfg, configPath, err := loadConfigForCmd(cmd, deps.loadConfig)
 	if err != nil {
+		// No config means no way to know whether notifications are
+		// enabled -- see the run-notifications spec's "covered failure
+		// points".
 		return err
 	}
+	result, err := runVMWithConfig(cmd, deps, cfg, configPath, vmName)
+	notifyRunOutcome(cmd, deps, cfg, vmName, result, err)
+	return err
+}
 
+// runVMWithConfig is everything runVM does after config has loaded. It
+// returns the backup.Result (nil on failure, or if the run never
+// started) so runVM can notify on every return path from one place --
+// an early return added here later can't silently skip notification.
+func runVMWithConfig(cmd *cobra.Command, deps runDeps, cfg *config.Config, configPath, vmName string) (*backup.Result, error) {
 	vmCfg, ok := findVMConfig(cfg.VMs, vmName)
 	if !ok {
-		return fmt.Errorf("no VM named %q in config %s", vmName, configPath)
+		return nil, fmt.Errorf("no VM named %q in config %s", vmName, configPath)
 	}
 
 	if logPath, err := launchd.LogPath(vmCfg.Name); err == nil {
@@ -120,7 +137,7 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 
 	ctrl, err := deps.newController()
 	if err != nil {
-		return fmt.Errorf("connect to VM controller: %w", err)
+		return nil, fmt.Errorf("connect to VM controller: %w", err)
 	}
 
 	opts := backup.Options{
@@ -140,26 +157,70 @@ func runVM(cmd *cobra.Command, deps runDeps, vmName string) error {
 	// leaves it enabled for the incomplete case so the user sees *some*
 	// message instead of a silent exit 1. This doesn't affect the exit
 	// code: cmd/snapback/main.go only checks whether err != nil.
-	return dispatchRun(cmd, out, deps.isTerminal, deps.runInteractive, vmName,
+	var result *backup.Result
+	err = dispatchRun(cmd, out, deps.isTerminal, deps.runInteractive, vmName,
 		func(ctx context.Context, r progress.Reporter) (*backup.Result, error) {
-			return backup.Run(ctx, ctrl, r, opts)
+			res, err := backup.Run(ctx, ctrl, r, opts)
+			result = res
+			return res, err
 		},
 		func(err error) { warnIfMaybeOrphaned(cmd, vmName, err) },
-		func(result *backup.Result) {
-			_, _ = fmt.Fprintf(out, "backup complete: %s\n", result.ArchivePath)
+		func(res *backup.Result) {
+			_, _ = fmt.Fprintf(out, "backup complete: %s\n", res.ArchivePath)
 		},
 	)
+	if err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+// notifyRunOutcome sends a macOS notification for a finished run when
+// notifications are enabled and nobody is watching (stdout isn't a
+// terminal -- e.g. a launchd-scheduled run). Failures always notify;
+// successes only when on_success is set. A send failure is a stderr
+// warning only: it never changes run's outcome. The notification gets a
+// context detached from the command's cancellation so a SIGINT'd run
+// still reports its failure. See
+// docs/superpowers/specs/2026-10-26-run-notifications-design.md.
+func notifyRunOutcome(cmd *cobra.Command, deps runDeps, cfg *config.Config, vmName string, result *backup.Result, runErr error) {
+	if deps.newNotifier == nil || !cfg.Notifications.Enabled || isTerminalWriter(deps.isTerminal, cmd.OutOrStdout()) {
+		return
+	}
+	var n notify.Notification
+	switch {
+	case runErr != nil:
+		n = notify.Failure(vmName, runErr, snapshotMayRemain(runErr))
+	case !cfg.Notifications.OnSuccess:
+		return
+	default:
+		archiveID := ""
+		if result != nil {
+			archiveID = result.ArchiveID
+		}
+		n = notify.Success(vmName, archiveID)
+	}
+	if err := deps.newNotifier().Notify(context.WithoutCancel(cmd.Context()), n); err != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: could not send notification: %v\n", err)
+	}
 }
 
 // warnIfMaybeOrphaned prints a pointer to `snapback cleanup` on stderr
-// if err is a *backup.RunError tagged at Stage: Snapshotting or later --
-// see backup.Run's doc comment for why that Stage range specifically
-// means a snapshot may have been left behind on the source VM.
+// if snapshotMayRemain(err).
 func warnIfMaybeOrphaned(cmd *cobra.Command, vmName string, err error) {
-	var runErr *backup.RunError
-	if errors.As(err, &runErr) && runErr.Stage >= progress.Snapshotting {
+	if snapshotMayRemain(err) {
 		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: a snapshot may remain on %q; run `snapback cleanup --vm %s` to remove it\n", vmName, vmName)
 	}
+}
+
+// snapshotMayRemain reports whether err is a *backup.RunError tagged at
+// Stage: Snapshotting or later -- see backup.Run's doc comment for why
+// that Stage range means a snapshot may have been left behind. Shared by
+// warnIfMaybeOrphaned and notifyRunOutcome so the stderr warning and the
+// notification's cleanup hint can never disagree.
+func snapshotMayRemain(err error) bool {
+	var runErr *backup.RunError
+	return errors.As(err, &runErr) && runErr.Stage >= progress.Snapshotting
 }
 
 func findVMConfig(vms []config.VM, name string) (config.VM, bool) {

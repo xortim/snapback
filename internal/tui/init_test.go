@@ -186,6 +186,7 @@ func TestPromptCoreSettings_AcceptsAllDefaults(t *testing.T) {
 		keepDaily:   defaultKeepDaily,
 		keepWeekly:  defaultKeepWeekly,
 		notify:      true,
+		onSuccess:   true,
 	}
 	if got != want {
 		t.Errorf("promptCoreSettings() = %+v, want %+v", got, want)
@@ -703,5 +704,40 @@ func TestRunInitWizard_DeclinedAtReview_ReturnsAbortedError(t *testing.T) {
 	_, err := RunInitWizard(context.Background(), in, &out, true, candidates, nil)
 	if err == nil || !strings.Contains(err.Error(), "aborted") {
 		t.Fatalf("RunInitWizard() error = %v, want an \"aborted\" error", err)
+	}
+}
+
+func TestRunInitWizard_FreshInit_OnSuccessTrue(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n")
+	cfg, err := RunInitWizard(context.Background(), in, &bytes.Buffer{}, true, candidates, nil)
+	if err != nil {
+		t.Fatalf("RunInitWizard() error = %v", err)
+	}
+	if !cfg.Notifications.OnSuccess {
+		t.Error("OnSuccess = false, want true on a fresh init")
+	}
+}
+
+func TestRunInitWizard_Force_PreservesOnSuccessFalse(t *testing.T) {
+	candidates := []VMCandidate{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}}
+	prior := &config.Config{
+		Destination: defaultDestination,
+		Compression: defaultCompression,
+		Retention: config.Retention{
+			KeepLast:   defaultKeepLast,
+			KeepDaily:  defaultKeepDaily,
+			KeepWeekly: defaultKeepWeekly,
+		},
+		VMs:           []config.VM{{Name: "dev", VMX: "/vms/dev.vmwarevm/dev.vmx"}},
+		Notifications: config.Notifications{Enabled: true, OnSuccess: false},
+	}
+	in := strings.NewReader("0\nn\n\n\n\n\n\n\n\n\n")
+	cfg, err := RunInitWizard(context.Background(), in, &bytes.Buffer{}, true, candidates, prior)
+	if err != nil {
+		t.Fatalf("RunInitWizard() error = %v", err)
+	}
+	if cfg.Notifications.OnSuccess {
+		t.Error("OnSuccess = true, want prior's false preserved across init --force")
 	}
 }

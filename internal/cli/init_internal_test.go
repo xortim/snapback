@@ -759,3 +759,23 @@ func TestInitCmd_SyncSchedules_ExpandsTildeDestinationBeforeRunningCheck(t *test
 		t.Errorf("stdout = %q, want \"skipped: dev\" -- proves \"~/backups\" was expanded to %q before backup.IsRunning found the held lock there", out.String(), expandedDest)
 	}
 }
+
+func TestInitCmd_NotificationsEnabled_PrintsNotifyTestTip(t *testing.T) {
+	for _, enabled := range []bool{true, false} {
+		var written []byte
+		var writtenPath string
+		cfg := &config.Config{Destination: "/dest", Compression: "zstd", Notifications: config.Notifications{Enabled: enabled}}
+		root := newTestRootForInit(t, fakeInitDeps(nil, false, &written, &writtenPath, cfg))
+		var errOut bytes.Buffer
+		root.SetArgs([]string{"init", "--config", filepath.Join(t.TempDir(), "config.yaml")})
+		root.SetIn(strings.NewReader(""))
+		root.SetOut(&bytes.Buffer{})
+		root.SetErr(&errOut)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("enabled=%v: Execute() error = %v", enabled, err)
+		}
+		if got := strings.Contains(errOut.String(), "snapback notify test"); got != enabled {
+			t.Errorf("enabled=%v: stderr = %q, want tip present=%v", enabled, errOut.String(), enabled)
+		}
+	}
+}

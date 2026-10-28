@@ -17,7 +17,7 @@ const (
 	Compressing
 	Checksumming
 	Pruning
-	Notifying
+	Notifying // reserved: run's notifications are sent by internal/cli after the choreography finishes, not emitted as a stage (docs/superpowers/specs/2026-10-26-run-notifications-design.md)
 	Verifying
 	Extracting
 	CheckingDiskConsistency
