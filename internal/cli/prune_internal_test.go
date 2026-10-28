@@ -176,3 +176,31 @@ func TestPruneCmd_NoArchives_ReportsNothingToPrune(t *testing.T) {
 		t.Errorf("stdout = %q, want a no-archives line for a", out)
 	}
 }
+
+func TestPruneCmd_RemovalFailure_ShowsRemoveFailed(t *testing.T) {
+	cfg := &config.Config{Destination: t.TempDir(), Retention: config.Retention{KeepLast: 1}, VMs: []config.VM{{Name: "a"}}}
+	arch := func(id string, e error) backup.PrunedArchive {
+		return backup.PrunedArchive{Archive: backup.Archive{ArchiveID: id, Manifest: backup.Manifest{VMName: "a", Timestamp: pruneTestNow}}, Err: e}
+	}
+	deps := pruneDeps{
+		loadConfig: func(string) (*config.Config, error) { return cfg, nil },
+		prune: func(string, string, retention.Policy, time.Time, bool) (backup.PruneResult, error) {
+			return backup.PruneResult{
+				Kept:    []backup.PrunedArchive{arch("a-3", nil)},
+				Removed: []backup.PrunedArchive{arch("a-1", nil), arch("a-2", errBoom)},
+				Errs:    []error{errBoom},
+			}, nil
+		},
+		now: func() time.Time { return pruneTestNow },
+	}
+
+	out, _, err := execPrune(t, deps)
+	if err == nil {
+		t.Fatal("Execute() error = nil, want non-nil for a removal failure")
+	}
+	for _, want := range []string{"remove failed", "kept 1, removed 1, failed 1"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("stdout = %q, want %q", out, want)
+		}
+	}
+}

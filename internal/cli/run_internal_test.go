@@ -738,4 +738,23 @@ func TestRunCmd_PruneFailure_WarnsButSucceeds(t *testing.T) {
 	if !strings.Contains(errOut.String(), "warning: pruning old backups failed:") {
 		t.Errorf("stderr = %q, want the prune-failure warning", errOut.String())
 	}
+	if strings.Contains(out.String(), "pruned ") {
+		t.Errorf("stdout = %q, must not claim anything was pruned", out.String())
+	}
+	entries, err := os.ReadDir(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, e := range entries {
+		if !e.IsDir() || e.Name() == filepath.Base(old) {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(dest, e.Name(), "manifest.json")); err == nil {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no new archive with a manifest in %s", dest)
+	}
 }

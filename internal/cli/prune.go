@@ -111,9 +111,27 @@ func printPruneResult(w io.Writer, vmName string, res backup.PruneResult, dryRun
 			_, _ = fmt.Fprintf(tw, "%s\t%s\tkeep (%s)\n", a.ArchiveID, a.Manifest.Timestamp.Local().Format(time.DateTime), strings.Join(a.Reasons, ", "))
 		}
 		for _, a := range res.Removed {
-			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", a.ArchiveID, a.Manifest.Timestamp.Local().Format(time.DateTime), removeVerb)
+			action := removeVerb
+			if a.Err != nil {
+				action = "remove failed"
+			}
+			_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", a.ArchiveID, a.Manifest.Timestamp.Local().Format(time.DateTime), action)
 		}
 		return nil
 	})
-	_, _ = fmt.Fprintf(w, "kept %d, %s %d\n", len(res.Kept), removeVerb, len(res.Removed))
+	failed := 0
+	for _, a := range res.Removed {
+		if a.Err != nil {
+			failed++
+		}
+	}
+	summaryVerb := "removed"
+	if dryRun {
+		summaryVerb = "would remove"
+	}
+	line := fmt.Sprintf("kept %d, %s %d", len(res.Kept), summaryVerb, len(res.Removed)-failed)
+	if failed > 0 {
+		line += fmt.Sprintf(", failed %d", failed)
+	}
+	_, _ = fmt.Fprintln(w, line)
 }
