@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xortim/snapback/internal/progress"
+	"github.com/xortim/snapback/internal/retention"
 	"github.com/xortim/snapback/internal/vm"
 )
 
@@ -27,6 +28,7 @@ type Options struct {
 	Destination string           // parent directory the backup's output directory is created under
 	StagingDir  string           // parent directory for the temporary staging copy; os.TempDir() if empty
 	Compression string           // "zstd", "gzip", or "" (prefer zstd, fall back to gzip)
+	Retention   retention.Policy // applied to this VM's archives after a successful backup; zero keeps everything
 	Now         func() time.Time // defaults to time.Now if nil
 }
 
@@ -37,6 +39,11 @@ type Result struct {
 	ArchivePath  string
 	ManifestPath string
 	Manifest     Manifest
+	// Pruned lists the archives the post-backup prune removed. PruneErr
+	// is non-nil if that prune failed in any way; it never makes Run
+	// return an error -- the archive just written is good regardless.
+	Pruned   []PrunedArchive
+	PruneErr error
 }
 
 // Summary implements internal/tui's pipelineResult interface, letting the
@@ -442,6 +449,17 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 	}
 
 	succeeded = true
+
+	// Stage: Pruning -- last, under the lock Run already holds, and only
+	// reached once everything above succeeded. now() rather than
+	// startTime: day/week buckets are computed in now's location (local
+	// time in production), and startTime was forced to UTC.
+	reporter.Report(progress.Event{Stage: progress.Pruning, Message: "pruning old archives"})
+	pruneRes, pruneErr := pruneLocked(opts.Destination, opts.VMName, opts.Retention, now(), false)
+	if len(pruneRes.Errs) > 0 {
+		pruneErr = errors.Join(append([]error{pruneErr}, pruneRes.Errs...)...)
+	}
+
 	reporter.Report(progress.Event{Stage: progress.Done, Message: "backup complete"})
 	return &Result{
 		ArchiveID:    archiveID,
@@ -449,6 +467,8 @@ func Run(ctx context.Context, ctrl vm.Controller, reporter progress.Reporter, op
 		ArchivePath:  archivePath,
 		ManifestPath: manifestPath,
 		Manifest:     manifest,
+		Pruned:       pruneRes.Removed,
+		PruneErr:     pruneErr,
 	}, nil
 }
 
