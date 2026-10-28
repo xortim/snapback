@@ -67,6 +67,7 @@ disk images.
 
 - macOS
 - VMware Fusion (Player or Pro — this doesn't clone, so edition doesn't gate the mechanism)
+  — Fusion.app itself doesn't need to be running: `vmcli` and `vmware-vdiskmanager` are invoked directly, so scheduled runs work with the app quit
 - Go 1.26.5+ (build only; see `go.mod`)
 - [xbar](https://xbarapp.com/) or [SwiftBar](https://swiftbar.app/), for the menu bar UI
 - `zstd` (optional — `brew install zstd`; falls back to gzip if absent)
