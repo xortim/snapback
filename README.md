@@ -1,8 +1,8 @@
 # snapback
 
 Zero-downtime backup manager for VMware Fusion VMs on macOS. Snapshot,
-copy, checksum, restore, and scheduled unattended backups via `launchd`
-today — retention pruning and an xbar menu-bar plugin are next (see
+copy, checksum, restore, scheduled unattended backups via `launchd`, and
+retention pruning today — an xbar menu-bar plugin is next (see
 Status/Roadmap below).
 
 Built because [Vimalin](https://www.vimalin.com/) is GUI-only shareware
@@ -48,7 +48,9 @@ when `notifications.on_success: true` (as `init` writes it), and
 `snapback notify test` triggers the Script Editor permission prompt
 while you're at the machine. The other item the original Phase 2
 bundled in, `run --all`, turned out to be unnecessary — one plist per VM means launchd fires
-each VM's `run --vm` independently. Retention pruning has landed too: `run` prunes each VM's archives after every successful backup, and `snapback prune` applies the policy on demand. See
+each VM's `run --vm` independently. Retention pruning has landed too:
+`run` prunes each VM's archives after every successful backup, and
+`snapback prune` applies the policy on demand. See
 [`docs/design.md`](docs/design.md) for the full ADR
 — architecture, choreography, config schema, risks, and the open
 questions still worth verifying locally, plus its own Roadmap section
