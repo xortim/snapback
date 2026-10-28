@@ -145,6 +145,7 @@ func runVMWithConfig(cmd *cobra.Command, deps runDeps, cfg *config.Config, confi
 		VMXPath:     vmCfg.VMX,
 		Destination: cfg.Destination,
 		Compression: cfg.Compression,
+		Retention:   retentionPolicy(cfg.Retention),
 	}
 
 	out := cmd.OutOrStdout()
@@ -167,10 +168,19 @@ func runVMWithConfig(cmd *cobra.Command, deps runDeps, cfg *config.Config, confi
 		func(err error) { warnIfMaybeOrphaned(cmd, vmName, err) },
 		func(res *backup.Result) {
 			_, _ = fmt.Fprintf(out, "backup complete: %s\n", res.ArchivePath)
+			if n := len(res.Pruned); n > 0 {
+				_, _ = fmt.Fprintf(out, "pruned %d old backup(s)\n", n)
+			}
 		},
 	)
 	if err != nil {
 		return nil, err
+	}
+	// Printed for both the interactive and plain paths -- the TUI shows the
+	// pruning stage but not its failure, and for a scheduled run stderr is
+	// the per-VM log.
+	if result != nil && result.PruneErr != nil {
+		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "warning: pruning old backups failed: %v\n", result.PruneErr)
 	}
 	return result, nil
 }
