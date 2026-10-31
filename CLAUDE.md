@@ -103,7 +103,9 @@ make test       # go test -coverprofile=coverage.out -covermode=atomic -v ./...
 make lint       # golangci-lint fmt --diff, then golangci-lint run
 make fmt-fix    # apply golangci-lint formatting fixes
 make verify     # go mod verify
-make tools      # installs golangci-lint and goreleaser (git-cliff install separately)
+make tools      # installs golangci-lint and goreleaser
+make snapshot   # goreleaser dry-run build into dist/ (no publish)
+make release-check  # goreleaser check (also runs in CI's lint job)
 make all        # clean verify lint test build
 ```
 
@@ -126,9 +128,11 @@ earlier draft of the design doc had a stale `VMBACKUP_INTEGRATION` name
 from before the project was renamed; already fixed.)
 
 **Makefile:** originally copied from another project template
-(`xortim/penny`) — `EXECUTABLE` is now `snapback` and the leftover
-`start-db`/`stop-db` MariaDB targets (no database involved in this
-project) have been removed.
+(`xortim/penny`) — `EXECUTABLE` is now `snapback`, the leftover
+`start-db`/`stop-db` MariaDB targets have been removed, and the dead
+`conf.*` ldflags were replaced by `internal/version` (#108). Releases go
+through goreleaser on `v*` tags (`.github/workflows/release.yml`);
+goreleaser's built-in changelog replaced git-cliff.
 
 ## Architecture
 

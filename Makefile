@@ -1,11 +1,13 @@
 COMMIT_HASH ?= $(shell git rev-parse --short HEAD 2>/dev/null)
 GITVERSION  ?= $(shell git describe --tags --exact-match 2>/dev/null || git describe --tags 2>/dev/null || echo "v0.0.0-$(COMMIT_HASH)")
+BUILD_DATE  ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 
 GO          ?= go
 GOOS        ?= $(shell $(GO) env GOOS)
 GOARCH      ?= $(shell $(GO) env GOARCH)
 PACKAGENAME := $(shell go list -m -f '{{.Path}}')
-GOLDFLAGS   ?= -s -w -X $(PACKAGENAME)/conf.Executable=$(EXECUTABLE) -X $(PACKAGENAME)/conf.GitVersion=$(GITVERSION)
+VERSION_PKG := $(PACKAGENAME)/internal/version
+GOLDFLAGS   ?= -s -w -X $(VERSION_PKG).Version=$(GITVERSION) -X $(VERSION_PKG).Commit=$(COMMIT_HASH) -X $(VERSION_PKG).Date=$(BUILD_DATE)
 GOBUILD     ?= CGO_ENABLED=0 $(GO) build -ldflags="$(GOLDFLAGS)"
 GO_FILES    := $(shell find . -type f -name '*.go' -not -path './vendor/*')
 
@@ -70,25 +72,25 @@ clean: ## Clean the workspace and dist/
 tools: ## Install tools needed for development
 	@$(MAKE) --no-print-directory log-$@
 	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
-	@go install github.com/goreleaser/goreleaser/v2@latest
-	@echo "NOTE: git-cliff must be installed separately (brew install git-cliff or cargo install git-cliff)"
+	@go install github.com/goreleaser/goreleaser/v2@v2.18.3
 
 ###############
 ##@ Release
-# Requires: goreleaser (make tools), git-cliff (see above)
+# Requires: goreleaser (make tools). Release notes come from goreleaser's
+# built-in changelog (see .goreleaser.yaml); there is no CHANGELOG.md.
 
-.PHONY: changelog
-changelog: ## Generate CHANGELOG.md using git-cliff
+.PHONY: release-check
+release-check: ## Validate .goreleaser.yaml
 	@$(MAKE) --no-print-directory log-$@
-	git-cliff --output CHANGELOG.md
+	goreleaser check
 
 .PHONY: snapshot
-snapshot: changelog ## Build a snapshot release locally (no publish)
+snapshot: ## Build a snapshot release locally (no publish)
 	@$(MAKE) --no-print-directory log-$@
 	goreleaser release --snapshot --clean
 
 .PHONY: release
-release: changelog ## Create a release with goreleaser
+release: ## Create a release with goreleaser (CI does this on v* tags)
 	@$(MAKE) --no-print-directory log-$@
 	goreleaser release --clean
 
