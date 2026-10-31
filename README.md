@@ -76,10 +76,26 @@ disk images.
 
 ## Install
 
+Download the `darwin_arm64` (Apple silicon) or `darwin_amd64` (Intel)
+tarball from the [latest release](https://github.com/xortim/snapback/releases),
+verify it against `checksums.txt`, and put `snapback` on your `$PATH`:
+
 ```sh
-git clone <repo-url> && cd snapback
-go build -o snapback ./cmd/snapback
+shasum -a 256 -c checksums.txt --ignore-missing
+tar -xzf snapback_*_darwin_arm64.tar.gz snapback
 sudo mv snapback /usr/local/bin/
+snapback --version
+```
+
+The binary isn't signed or notarized. If you downloaded the tarball with
+a browser, macOS quarantines it and Gatekeeper will refuse to run it;
+clear that with `xattr -d com.apple.quarantine /usr/local/bin/snapback`.
+(`curl -LO` downloads aren't quarantined.)
+
+Or build from source (Go 1.26.5+):
+
+```sh
+go install github.com/xortim/snapback/cmd/snapback@latest
 ```
 
 ## Quick start
@@ -144,6 +160,22 @@ for the reasoning.
 go test ./...                          # unit tests, fake controller only
 SNAPBACK_INTEGRATION=1 go test ./... -tags=integration  # real vmrun/vmcli, needs a scratch VM
 ```
+
+## Releasing
+
+Pushing a `v*` tag runs `.github/workflows/release.yml`: the same
+lint/test/build gate as CI, then goreleaser builds darwin/arm64 +
+darwin/amd64, and publishes a GitHub Release with tarballs,
+`checksums.txt`, and release notes grouped from conventional-commit
+prefixes. Tags with a prerelease suffix (`-rc.N`) are marked prerelease.
+
+```sh
+make snapshot                   # dry run: full goreleaser build into dist/, no publish
+git tag -a v1.0.0-rc.2 -m v1.0.0-rc.2 && git push origin v1.0.0-rc.2
+```
+
+`make build` only rebuilds when `.go` files change, so after tagging use
+`make clean build` to get a binary stamped with the new tag.
 
 ## Roadmap
 
