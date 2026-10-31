@@ -20,6 +20,7 @@ jobs:
           cache: true
       - run: make tools
       - run: make lint
+      - run: make release-check
 
   test:
     strategy:

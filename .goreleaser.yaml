@@ -1,0 +1,59 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+
+project_name: snapback
+
+before:
+  hooks:
+    - go mod verify
+
+builds:
+  - id: snapback
+    main: ./cmd/snapback
+    binary: snapback
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [arm64, amd64]
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    # Same symbols as the Makefile's GOLDFLAGS. "v{{ .Version }}" (not
+    # .Tag) so snapshot builds get the SNAPSHOT version_template below
+    # instead of masquerading as the last real tag.
+    ldflags:
+      - -s -w
+      - -X github.com/xortim/snapback/internal/version.Version=v{{ .Version }}
+      - -X github.com/xortim/snapback/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/xortim/snapback/internal/version.Date={{ .CommitDate }}
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - LICENSE
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ .Version }}-SNAPSHOT-{{ .ShortCommit }}"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^Merge "
+  groups:
+    - title: Features
+      regexp: '^feat(\([^)]*\))?!?:'
+      order: 0
+    - title: Bug fixes
+      regexp: '^[a-z,]*fix(\([^)]*\))?!?:'
+      order: 1
+    - title: Other
+      order: 999
+
+release:
+  prerelease: auto
