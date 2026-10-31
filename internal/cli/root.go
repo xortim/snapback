@@ -7,13 +7,18 @@ import (
 	"path/filepath"
 
 	"github.com/spf13/cobra"
+	"github.com/xortim/snapback/internal/version"
 )
 
 func NewRootCmd() *cobra.Command {
 	root := &cobra.Command{
-		Use:   "snapback",
-		Short: "Zero-downtime backup manager for VMware Fusion VMs",
+		Use:     "snapback",
+		Short:   "Zero-downtime backup manager for VMware Fusion VMs",
+		Version: version.Get().String(),
 	}
+	// Cobra's default is "snapback version <v>"; the Info string already
+	// reads as a version, so drop the redundant word.
+	root.SetVersionTemplate("snapback {{.Version}}\n")
 
 	// Default left empty rather than calling defaultConfigPath() here: that
 	// would resolve (and warn on) the home directory at flag-registration
