@@ -82,7 +82,7 @@ verify it against `checksums.txt`, and put `snapback` on your `$PATH`:
 
 ```sh
 shasum -a 256 -c checksums.txt --ignore-missing
-tar -xzf snapback_*_darwin_arm64.tar.gz snapback
+tar -xzf snapback_*_darwin_arm64.tar.gz snapback   # darwin_amd64 on Intel
 sudo mv snapback /usr/local/bin/
 snapback --version
 ```
