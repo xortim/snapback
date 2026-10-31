@@ -72,7 +72,7 @@ clean: ## Clean the workspace and dist/
 tools: ## Install tools needed for development
 	@$(MAKE) --no-print-directory log-$@
 	@go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
-	@go install github.com/goreleaser/goreleaser/v2@latest
+	@go install github.com/goreleaser/goreleaser/v2@v2.18.3
 
 ###############
 ##@ Release
